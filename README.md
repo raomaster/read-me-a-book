@@ -24,17 +24,25 @@
 
 ## 🧰 Requisitos
 
-- Python 3.10
+- [Conda](https://docs.conda.io/en/latest/miniconda.html) (Anaconda o Miniconda)
+- Python 3.10 (se instala automáticamente con Conda)
 - Git
 - (Opcional) ffmpeg si quieres convertir `.wav` a `.mp3`
 
 ---
 
-## 📦 Instalación
+## 📦 Instalación (usando Conda)
 
 ```bash
 git clone https://github.com/tu-usuario/read-me-a-book.git
 cd read-me-a-book
-python -m venv venv
-venv\Scripts\activate   # En Windows
-pip install -r requirements.txt
+
+# Crear entorno conda
+conda create -n read-me-a-book python=3.10 -y
+conda activate read-me-a-book
+
+# Instalar PyTorch (versión CPU)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Instalar dependencias del motor TTS
+pip install -r external/tortoise-tts/requirements.txt
