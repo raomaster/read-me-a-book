@@ -43,6 +43,42 @@ conda activate read-me-a-book
 
 # Instalar PyTorch (versión CPU)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
 
-# Instalar dependencias del motor TTS
-pip install -r external/tortoise-tts/requirements.txt
+---
+
+### 🧰 Instalar dependencias de Tortoise TTS (sin deepspeed)
+
+Para instalar solo las dependencias necesarias de Tortoise TTS (ignorando `deepspeed`):
+
+```bash
+python scripts/install_tortoise_deps.py
+```
+
+---
+
+### 📌 Requisitos adicionales en Windows
+
+Para que la instalación de Coqui TTS funcione correctamente en Windows, necesitas herramientas de compilación:
+
+1. Instala [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+2. Durante la instalación, marca la opción:
+
+   ✅ **Desarrollo de escritorio con C++**
+
+Esto instalará:
+- MSVC v143 (compilador)
+- Windows 10 SDK
+- Herramientas de línea de comandos
+
+Una vez instalado, **reinicia la terminal** y continúa con la instalación.
+
+---
+
+### 🗣️ Instalar dependencias de Coqui TTS
+
+```bash
+pip install -r requirements.txt
+```
+
+
