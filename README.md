@@ -82,3 +82,27 @@ pip install -r requirements.txt
 ```
 
 
+
+## 🔧 Instalación automática de dependencias
+
+Este repositorio incluye scripts para instalar automáticamente las dependencias requeridas por `coqui-ai-TTS`.
+
+### En Unix/macOS
+
+```bash
+bash scripts/install_requirements.sh
+```
+
+Asegúrate de darle permisos de ejecución si es necesario:
+
+```bash
+chmod +x scripts/install_requirements.sh
+```
+
+### En Windows PowerShell
+
+```powershell
+scripts\install_requirements.ps1
+```
+
+Ambos scripts instalarán las dependencias listadas en `scripts/requirements.txt`.
