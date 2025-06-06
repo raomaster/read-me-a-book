@@ -1,8 +1,16 @@
 from pypdf import PdfReader
 import os
 from gtts import gTTS
+import logging
 
-class PDFToAudio:
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+
+
+class PDFToAudioOCR:
     def __init__(self, pdf_path, output_txt_path, output_audio_path):
         self.pdf_path = pdf_path
         self.output_txt_path = output_txt_path
@@ -36,7 +44,7 @@ class PDFToAudio:
             self.text_to_speech(cleaned_text)
 
 if __name__ == "__main__":
-    pdf_to_audio = PDFToAudio('input.pdf', 'output.txt', 'output.mp3')
+    pdf_to_audio = PDFToAudioOCR('input.pdf', 'output.txt', 'output.mp3')
     pdf_to_audio.process()
 
 

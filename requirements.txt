@@ -27,3 +27,12 @@ kokoro>=0.9.4
 scipy>=1.11
 accelerate>=0.24.1
 gtts
+Flask
+flasgger
+gTTS
+pytesseract
+pdf2image
+Pillow
+opencv-python
+numpy
+pydub
