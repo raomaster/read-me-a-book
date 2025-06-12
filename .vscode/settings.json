@@ -1,5 +1,93 @@
 {
-    "python.analysis.extraPaths": [
-        "./external/tortoise-tts"
-    ]
+    // Excluye archivos y carpetas del explorador de archivos de VS Code y de muchas operaciones de extensiones.
+    "files.exclude": {
+        "**/.git": true, // Excluye la carpeta .git (control de versiones)
+        "**/.DS_Store": true, // Excluye archivos de macOS
+        "**/.venv": true, // Excluye entornos virtuales modernos (.venv)
+        "**/venv": true, // Excluye entornos virtuales comunes (venv)
+        "**/env": true, // Excluye otros nombres comunes para entornos virtuales (env)
+        "**/node_modules": true, // Excluye dependencias de Node.js (si usas JavaScript/TypeScript)
+        "**/__pycache__": true, // Excluye caché de Python
+        "**/*.pyc": true, // Excluye archivos compilados de Python
+        "**/*.log": true, // Excluye archivos de log
+        "**/dist": true, // Excluye carpetas de distribución/build (ej. paquetes, compilaciones)
+        "**/build": true, // Excluye carpetas de build/compilación
+        "**/tmp": true, // Excluye carpetas temporales
+        "**/temp": true, // Excluye carpetas temporales
+        "**/.pytest_cache": true, // Excluye caché de pytest
+        "**/.mypy_cache": true // Excluye caché de mypy (type checker)
+    },
+
+    // Excluye archivos y carpetas de las operaciones de búsqueda de VS Code y de indexación de extensiones.
+    // Es crucial que coincida con files.exclude para maximizar el impacto en el rendimiento de los asistentes de código.
+    "search.exclude": {
+        "**/.git": true,
+        "**/.DS_Store": true,
+        "**/.venv": true,
+        "**/venv": true,
+        "**/env": true,
+        "**/node_modules": true,
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "**/*.log": true,
+        "**/dist": true,
+        "**/build": true,
+        "**/tmp": true,
+        "**/temp": true,
+        "**/.pytest_cache": true,
+        "**/.mypy_cache": true,
+        "**/coverage": true, // Excluye carpetas de cobertura de tests
+        "**/tests/**": true // Opcional: si tus tests son muy grandes y no necesitas que la IA los analice
+    },
+
+    // Configura patrones glob para excluir archivos y carpetas del observador de archivos de VS Code.
+    // Esto puede mejorar el rendimiento al reducir la cantidad de archivos que VS Code monitorea activamente.
+    "files.watcherExclude": {
+        "**/.git/objects/**": true,
+        "**/.git/subtree-cache/**": true,
+        "**/node_modules/*/**": true, // Exclusión más específica para node_modules
+        "**/.venv/**": true,
+        "**/venv/**": true,
+        "**/env/**": true,
+        "**/__pycache__/**": true,
+        "**/*.pyc": true,
+        "**/*.log": true,
+        "**/dist/**": true,
+        "**/build/**": true,
+        "**/tmp/**": true,
+        "**/temp/**": true,
+        "**/.pytest_cache/**": true,
+        "**/.mypy_cache/**": true,
+        "**/coverage/**": true
+    },
+    // Opcional: Configuración para el LSP de Python (ej. Pylance).
+    // Esto es muy útil porque también excluye estas carpetas del análisis de lenguaje.
+    "python.analysis.exclude": [
+        "**/.venv/**",
+        "**/venv/**",
+        "**/env/**",
+        "**/node_modules/**",
+        "**/__pycache__/**",
+        "**/dist/**",
+        "**/build/**",
+        "**/tmp/**",
+        "**/temp/**",
+        "**/.external/tortoise-tts/**"
+    ],
+
+    // Opcional: Si usas ESLint o Prettier con Node.js, también puedes configurarlos para ignorar.
+    // Esto es más para la consistencia y no tanto para el rendimiento de Gemini.
+    // "eslint.workingDirectories": [
+    //     { "mode": "auto" }
+    // ],
+    // "prettier.ignorePath": ".prettierignore" // Asegúrate de tener un .prettierignore
+    "editor.fontSize": 16,
+    "testing.alwaysRevealTestOnStateChange": true,
+    "emmet.includeLanguages": {
+        "jsx": "html",
+        "vue": "html",
+        "njk": "html",
+        "html": "html",
+        "javascript": "html"
+    },
 }

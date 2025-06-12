@@ -11,6 +11,7 @@ import cv2 # Para preprocesamiento de imágenes
 import time # Para añadir retrasos
 import numpy as np # Para trabajar con imágenes como arrays
 import subprocess # Para ejecutar Piper
+import re # Para expresiones regulares en clean_text
 from pydub import AudioSegment # Para unir audio
 
 logging.basicConfig(
@@ -124,7 +125,11 @@ class PDFToAudioOCR:
                 # --- Fin del Preprocesamiento de Imagen ---
                 try:
                     page_text = pytesseract.image_to_string(preprocessed_pil_image, lang=self.tesseract_lang)
-                    full_text += page_text + '\n'
+                    # Unir el texto de la página actual. Usar un espacio como separador
+                    # es generalmente más seguro que añadir un \n, ya que clean_text
+                    # se encargará de interpretar correctamente los \n dentro de page_text
+                    # y consolidar los espacios.
+                    full_text += page_text + ' '
                 except pytesseract.TesseractError as te:
                     logging.error(f"Error de Tesseract en la página {i+1}: {te}")
                     logging.error("Asegúrate de que Tesseract esté instalado y configurado correctamente, y que los paquetes de idioma necesarios (ej. tesseract-ocr-spa) estén instalados.")
@@ -147,8 +152,29 @@ class PDFToAudioOCR:
             return None
 
     def clean_text(self, text):
-        # Aquí puedes añadir operaciones de limpieza más específicas si es necesario
+        if not text:
+            return ""
+        # Normalizar todos los tipos de saltos de línea a \n
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+
+        # Preservar los saltos de párrafo intencionales (dos o más saltos de línea)
+        # reemplazándolos temporalmente con un marcador único.
+        # Esto también consolida 3+ saltos de línea en el marcador.
+        paragraph_marker = "[[PARA_BREAK_MARKER]]"
+        text = re.sub(r'\n\s*\n+', paragraph_marker, text) # Coincide con \n\n, \n \n, \n\n\n etc.
+
+        # Reemplazar los saltos de línea individuales restantes (probablemente rupturas de formato no deseadas
+        # dentro de un párrafo) con un espacio.
+        text = text.replace('\n', ' ')
+
+        # Restaurar los saltos de párrafo.
+        text = text.replace(paragraph_marker, '\n\n')
+        
+        # Consolidar múltiples espacios que podrían haberse introducido.
+        text = re.sub(r' +', ' ', text)
+        
         return text.strip()
+
 
     def save_to_txt(self, text):
         with open(self.output_txt_path, 'w', encoding='utf-8') as file:
@@ -166,24 +192,33 @@ class PDFToAudioOCR:
                 break
             else:
                 chunk_candidate = text[current_pos : current_pos + max_length]
-                last_break = -1
-                # Buscamos un delimitador como find e parrafo o linea para realizar el corte de texto
-                delimiters = ['\n\n', '. ', '.\n', '!\n', '?\n', '! ', '? ', '\n', '.'] # Corregido \s
+                last_break = -1 # Indica la posición donde cortar el chunk_candidate
+
+                # Delimitadores revisados. Después de clean_text, '\n' y '.' solos son menos necesarios
+                # y pueden ser problemáticos. Priorizamos \n\n y finales de oración claros.
+                delimiters = ['\n\n', '. ', '.\n', '! ', '!\n', '? ', '?\n']
+
                 for delim in delimiters:
                     pos = chunk_candidate.rfind(delim)
                     if pos != -1:
-                        if pos > max_length / 2 or len(delimiters) == 1:
+                        # Aceptar el delimitador si crea un fragmento de tamaño razonable
+                        # o si el chunk_candidate ya es corto.
+                        # (pos + len(delim)) es la longitud del fragmento que se crearía.
+                        potential_chunk_length = pos + len(delim)
+                        if potential_chunk_length > max_length // 4 or potential_chunk_length == len(chunk_candidate):
                             last_break = pos + len(delim)
                             break
-                if last_break == -1:
+                
+                if last_break == -1 or last_break == 0: # Si no se encontró un delimitador preferido o está al inicio
+                    # Intentar dividir por el último espacio para no cortar palabras.
                     pos = chunk_candidate.rfind(' ')
-                    if pos != -1 and pos > max_length / 3:
+                    if pos != -1 and pos > max_length // 4: # Evitar fragmentos muy pequeños si es posible
                         last_break = pos + 1
                 
-                if last_break != -1 and last_break > 0:
+                if last_break != -1 and last_break > 0: # Si se encontró un punto de división válido
                     chunks.append(text[current_pos : current_pos + last_break])
                     current_pos += last_break
-                else:
+                else: # Fallback: tomar el fragmento de max_length
                     chunks.append(text[current_pos : current_pos + max_length])
                     current_pos += max_length
         return [c.strip() for c in chunks if c.strip()]
