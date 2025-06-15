@@ -8,3 +8,11 @@ external/*
 */*.txt
 */*.txt
 *.pdf
+
+# Ignorar todas las carpetas de datos y medios
+/data/
+/media/
+
+# Archivos específicos de Docker y del sistema operativo
+.DS_Store
+*.log
