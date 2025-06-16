@@ -19,3 +19,4 @@ output/*
 .DS_Store
 *.log
 .env
+*.onnx
