@@ -26,9 +26,6 @@ bark==0.1.5
 kokoro>=0.9.4
 scipy>=1.11
 accelerate>=0.24.1
-gtts
-Flask
-flasgger
 gTTS
 pytesseract
 pdf2image
@@ -36,3 +33,11 @@ Pillow
 opencv-python
 numpy
 pydub
+fastapi
+uvicorn
+gtts
+PyMuPDF # Más robusto que pypdf2 para extracción
+ebooklib # Para leer archivos EPUB
+beautifulsoup4 # Para limpiar HTML de los EPUB
+python-multipart
+dotenv

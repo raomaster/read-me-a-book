@@ -62,14 +62,18 @@ class PiperEngine(TextToSpeechInterface):
             else:
                 if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
                     warning_message = f"Proceso Piper finalizó correctamente (código 0) pero el archivo de salida '{output_path}' no se creó o está vacío."
-                    if stdout_decoded: warning_message += f" Stdout: {stdout_decoded}"
-                    if stderr_decoded: warning_message += f" Stderr (inesperado en éxito): {stderr_decoded}"
+                    if stdout_decoded: 
+                        warning_message += f" Stdout: {stdout_decoded}"
+                    if stderr_decoded: 
+                        warning_message += f" Stderr (inesperado en éxito): {stderr_decoded}"
                     logging.warning(warning_message)
                     # Considerar lanzar una excepción aquí también si un archivo vacío es un fallo crítico.
                 else:
                     logging.info(f"Audio generado con Piper y guardado en: {output_path}")
-                    if stdout_decoded: logging.debug(f"Piper stdout (éxito): {stdout_decoded}")
-                    if stderr_decoded: logging.debug(f"Piper stderr (éxito, inesperado): {stderr_decoded}")
+                    if stdout_decoded: 
+                        logging.debug(f"Piper stdout (éxito): {stdout_decoded}")
+                    if stderr_decoded: 
+                        logging.debug(f"Piper stderr (éxito, inesperado): {stderr_decoded}")
         except FileNotFoundError as fnf_e:
             logging.error(f"Ejecutable de Piper no encontrado al intentar ejecutar el proceso: {self.piper_executable_path}. Error: {fnf_e}")
             raise

@@ -16,3 +16,4 @@ external/*
 # Archivos específicos de Docker y del sistema operativo
 .DS_Store
 *.log
+.env
