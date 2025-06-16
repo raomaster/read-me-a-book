@@ -12,6 +12,8 @@ external/*
 # Ignorar todas las carpetas de datos y medios
 /data/
 /media/
+outputs/*
+output/*
 
 # Archivos específicos de Docker y del sistema operativo
 .DS_Store

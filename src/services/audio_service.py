@@ -30,7 +30,7 @@ def extract_text_from_epub(epub_file: Path) -> str:
             tag.decompose()
 
         # Extraemos texto, usamos el separador de salto de linea y strip para eliminar espacion innecesarios
-        text_temp = soup.get_text(separator='\n', trip=True)
+        text_temp = soup.get_text(separator='\n', strip=True)
         text_parts.append(text_temp)
     
     return "\n\n".join(text_parts)

@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 import subprocess
-from src.config import CALIBRE_PATH
+from ..config import CALIBRE_PATH
 
 
 def convert_text_to_epub(text: str, input_txt_path: Path, output_epub_path: Path, title: str) -> Path:
