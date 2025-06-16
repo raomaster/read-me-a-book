@@ -1,5 +1,4 @@
 import os
-from gtts import gTTS
 import logging
 from flask import Flask, request, jsonify, send_from_directory, url_for
 from flasgger import Swagger
@@ -10,9 +9,11 @@ from PIL import Image # Pillow es una dependencia de pdf2image y/o pytesseract
 import cv2 # Para preprocesamiento de imágenes
 import time # Para añadir retrasos
 import numpy as np # Para trabajar con imágenes como arrays
-import subprocess # Para ejecutar Piper
 import re # Para expresiones regulares en clean_text
-from pydub import AudioSegment # Para unir audio
+from pydub import AudioSegment
+
+from .engines.engine_factory import create_engine
+from .interfaces import TextToSpeechInterface # Contrato
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,10 +66,10 @@ PIPER_VOICES = {
 }
 
 class PDFToAudioOCR:
-    def __init__(self, pdf_path, output_txt_path, output_audio_path, lang='es', tts_engine='gtts', piper_voice_key=None):
+    def __init__(self, pdf_path, output_txt_path, output_audio_base_path, lang='es', tts_engine='gtts', piper_voice_key=None):
         self.pdf_path = pdf_path
         self.output_txt_path = output_txt_path
-        self.output_audio_path = output_audio_path
+        self.output_audio_base_path = output_audio_base_path
         self.lang = lang
         # Mapeo de idiomas para Tesseract (ISO 639-2/B o ISO 639-3)
         self.ocr_lang_map = {
@@ -79,6 +80,15 @@ class PDFToAudioOCR:
         self.tesseract_lang = self.ocr_lang_map.get(self.lang, 'spa') # Por defecto a español si no se encuentra
         self.tts_engine = tts_engine
         self.piper_voice_key = piper_voice_key
+
+        self.tts_engine_instance: TextToSpeechInterface = create_engine(
+            engine_type=self.tts_engine,
+            lang=self.lang,
+            piper_voice_key=self.piper_voice_key,
+            piper_executable_path=PIPER_EXECUTABLE_PATH,
+            piper_voices_config=PIPER_VOICES
+        )
+        logging.info(f"PDFToAudioOCR inicializado con motor TTS: {self.tts_engine}")
 
     def extract_text_from_pdf_ocr(self, start_page=None, end_page=None):
         logging.info(f"Iniciando extracción de texto OCR para {self.pdf_path} en idioma {self.tesseract_lang}")
@@ -230,73 +240,92 @@ class PDFToAudioOCR:
 
         text_chunks = self._split_text_into_chunks(text)
         generated_audio_paths = []
-        # self.output_audio_path ahora es la ruta base SIN extensión
-        base_output_path = self.output_audio_path 
+        # self.output_audio_base_path ahora es la ruta base SIN extensión
+        # base_output_base_path = self.output_audio_path 
         
         # Si usamos Piper, la extensión será .wav, si no, la que venga (ej. .mp3 para gTTS)
         output_extension = ".wav" if self.tts_engine == "piper" else ".mp3"
         temp_fragment_paths = [] # Para los fragmentos individuales
         for i, chunk in enumerate(text_chunks):
-            if not chunk.strip(): continue
-            chunk_audio_path = f"{base_output_path}_part_{i}{output_extension}"
+            if not chunk.strip(): 
+                continue
+            chunk_audio_path = f"{self.output_audio_base_path}_part_{i}{output_extension}"
 
-            if self.tts_engine == "piper":
-                if not self.piper_voice_key or self.piper_voice_key not in PIPER_VOICES:
-                    logging.error(f"Clave de voz de Piper no válida o no proporcionada: {self.piper_voice_key}")
-                    continue # O manejar el error de otra forma
+            # if self.tts_engine == "piper":
+            #     if not self.piper_voice_key or self.piper_voice_key not in PIPER_VOICES:
+            #         logging.error(f"Clave de voz de Piper no válida o no proporcionada: {self.piper_voice_key}")
+            #         continue # O manejar el error de otra forma
 
-                voice_config = PIPER_VOICES[self.piper_voice_key]
-                piper_model_path = voice_config["model_path"]
+            #     voice_config = PIPER_VOICES[self.piper_voice_key]
+            #     piper_model_path = voice_config["model_path"]
 
-                try:
-                    if not os.path.exists(PIPER_EXECUTABLE_PATH):
-                        logging.error(f"Piper ejecutable no encontrado en: {PIPER_EXECUTABLE_PATH}")
-                        continue
-                    if not os.path.exists(piper_model_path):
-                        logging.error(f"Modelo de voz de Piper no encontrado en: {piper_model_path}")
-                        continue
+            #     try:
+            #         if not os.path.exists(PIPER_EXECUTABLE_PATH):
+            #             logging.error(f"Piper ejecutable no encontrado en: {PIPER_EXECUTABLE_PATH}")
+            #             continue
+            #         if not os.path.exists(piper_model_path):
+            #             logging.error(f"Modelo de voz de Piper no encontrado en: {piper_model_path}")
+            #             continue
 
-                    process = subprocess.Popen(
-                        [
-                            PIPER_EXECUTABLE_PATH,
-                            "--model", piper_model_path,
-                            "--output_file", chunk_audio_path
-                        ],
-                        stdin=subprocess.PIPE,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0 # Evitar ventana de consola en Windows
-                    )
-                    stdout, stderr = process.communicate(input=chunk.encode('utf-8'))
+            #         process = subprocess.Popen(
+            #             [
+            #                 PIPER_EXECUTABLE_PATH,
+            #                 "--model", piper_model_path,
+            #                 "--output_file", chunk_audio_path
+            #             ],
+            #             stdin=subprocess.PIPE,
+            #             stdout=subprocess.PIPE,
+            #             stderr=subprocess.PIPE,
+            #             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0 # Evitar ventana de consola en Windows
+            #         )
+            #         stdout, stderr = process.communicate(input=chunk.encode('utf-8'))
 
-                    if process.returncode != 0:
-                        logging.error(f"Error al generar audio con Piper para el fragmento {i+1}: {stderr.decode('utf-8', errors='ignore')}")
-                    else:
-                        temp_fragment_paths.append(chunk_audio_path)
-                        logging.info(f"Fragmento de audio {i+1}/{len(text_chunks)} generado con Piper ({self.piper_voice_key}): {chunk_audio_path}")
-                except Exception as e_piper:
-                    logging.error(f"Excepción al generar audio para el fragmento {i+1} con Piper ({self.piper_voice_key}): {e_piper}")
+            #         if process.returncode != 0:
+            #             logging.error(f"Error al generar audio con Piper para el fragmento {i+1}: {stderr.decode('utf-8', errors='ignore')}")
+            #         else:
+            #             temp_fragment_paths.append(chunk_audio_path)
+            #             logging.info(f"Fragmento de audio {i+1}/{len(text_chunks)} generado con Piper ({self.piper_voice_key}): {chunk_audio_path}")
+            #     except Exception as e_piper:
+            #         logging.error(f"Excepción al generar audio para el fragmento {i+1} con Piper ({self.piper_voice_key}): {e_piper}")
 
-            elif self.tts_engine == "gtts":
-                try:
-                    tts = gTTS(text=chunk, lang=self.lang)
-                    tts.save(chunk_audio_path)
-                    generated_audio_paths.append(chunk_audio_path)
-                    time.sleep(5) 
-                    temp_fragment_paths.append(chunk_audio_path)
-                    logging.info(f"Fragmento de audio {i+1}/{len(text_chunks)} generado con gTTS ({self.lang}): {chunk_audio_path}")
-                except Exception as e_gtts:
-                    logging.error(f"Error al generar audio para el fragmento {i+1} con gTTS: {e_gtts}")
-            else:
-                logging.error(f"Motor TTS no soportado: {self.tts_engine}")
+            # elif self.tts_engine == "gtts":
+            #     try:
+            #         tts = gTTS(text=chunk, lang=self.lang)
+            #         tts.save(chunk_audio_path)
+            #         generated_audio_paths.append(chunk_audio_path)
+            #         time.sleep(5) 
+            #         temp_fragment_paths.append(chunk_audio_path)
+            #         logging.info(f"Fragmento de audio {i+1}/{len(text_chunks)} generado con gTTS ({self.lang}): {chunk_audio_path}")
+            #     except Exception as e_gtts:
+            #         logging.error(f"Error al generar audio para el fragmento {i+1} con gTTS: {e_gtts}")
+            # else:
+            #     logging.error(f"Motor TTS no soportado: {self.tts_engine}")
         
+
+        try:
+            self.tts_engine_instance.text_to_speech(text=chunk, output_path=chunk_audio_path)
+            temp_fragment_paths.append(chunk_audio_path)
+            logging.info(f"Fragmento de audio {i+1}/{len(text_chunks)} ({len(chunk)} caracteres) generado con {self.tts_engine}: {chunk_audio_path}")
+
+            # Mantener un delay especifico para gTTS si es necesario
+            if self.tts_engine == "gtts":
+                time.sleep(5) 
+        except FileNotFoundError as efnf:
+            logging.error(f"Error al generar audio con TTS: {efnf}")
+            raise # Re-lanzar para que el endpoint lo maneje como un error de servidor
+        except Exception as etts:
+            logging.error(f"Error al generar audio con TTS: {etts}")
+            # Sin raise para que continuo con el siguiente fragmento
+    
+
+
         if not temp_fragment_paths:
             logging.warning("No se generaron fragmentos de audio.")
             return []
 
         # Unir los fragmentos
         combined_audio = AudioSegment.empty()
-        final_audio_path_with_ext = f"{base_output_path}_full{output_extension}"
+        final_audio_path_with_ext = f"{self.output_audio_base_path}_full{output_extension}"
 
         try:
             for fragment_path in temp_fragment_paths:
@@ -315,7 +344,7 @@ class PDFToAudioOCR:
             logging.error(f"Error al unir fragmentos de audio: {e_combine}")
             return [] # O devolver los fragmentos si la unión falla: return temp_fragment_paths
         finally:
-            # Limpiar fragmentos temporales
+            # Limpiar fragmentos temporales que ya no son necesarios
             for fragment_path in temp_fragment_paths:
                 if os.path.exists(fragment_path):
                     try:
@@ -466,7 +495,8 @@ def process_pdf_endpoint():
             if tts_engine == "piper" and piper_voice_key not in PIPER_VOICES:
                 return jsonify({"error": f"Clave de voz de Piper no válida: {piper_voice_key}. Voces disponibles: {list(PIPER_VOICES.keys())}"}), 400
             processor = PDFToAudioOCR(input_pdf_path, output_txt_path, output_audio_base_path, lang=lang, tts_engine=tts_engine, piper_voice_key=piper_voice_key)
-            result = processor.process(start_page=start_page, end_page=end_page)
+            # Process ahora trabaja en base al engine que se selecciono
+            result = processor.process(start_page=start_page, end_page=end_page) 
 
             if result["status"] == "success" or result["status"] == "partial_success_no_audio":
                 text_file_url = None
@@ -491,16 +521,24 @@ def process_pdf_endpoint():
                     "audio_file_urls": audio_file_urls
                 }), 200
             else:
-                if os.path.exists(input_pdf_path): os.remove(input_pdf_path)
+                if os.path.exists(input_pdf_path):
+                    os.remove(input_pdf_path)
                 return jsonify({"error": f"Falló el procesamiento del PDF: {result['status']}. Revisa los logs."}), 500
-
+    
         except pytesseract.TesseractNotFoundError:
             logging.error("Error de Tesseract no encontrado en el endpoint.")
-            if input_pdf_path and os.path.exists(input_pdf_path): os.remove(input_pdf_path)
+            if input_pdf_path and os.path.exists(input_pdf_path):
+                os.remove(input_pdf_path)
+            return jsonify({"error": "Error de configuración del servidor: Tesseract OCR no está instalado o configurado correctamente."}), 500
+        except FileNotFoundError as e_fnf: # Captura errores de paths de Piper/modelo desde el engine
+            logging.error(f"Error de archivo no encontrado durante la inicialización del motor TTS o procesamiento: {e_fnf}", exc_info=True)
+            if input_pdf_path and os.path.exists(input_pdf_path):
+                os.remove(input_pdf_path)
             return jsonify({"error": "Error de configuración del servidor: Tesseract OCR no está instalado o configurado correctamente."}), 500
         except Exception as e:
             logging.error(f"Error en el endpoint /process-pdf: {e}", exc_info=True)
-            if input_pdf_path and os.path.exists(input_pdf_path): os.remove(input_pdf_path)
+            if input_pdf_path and os.path.exists(input_pdf_path):
+                os.remove(input_pdf_path)
             return jsonify({"error": f"Ocurrió un error interno: {str(e)}"}), 500
     else:
         return jsonify({"error": "Tipo de archivo inválido. Solo se aceptan archivos PDF."}), 400
@@ -581,14 +619,17 @@ def text_to_audio_endpoint():
     # y text_to_speech. Se pasa un nombre base para los archivos de audio.
     unique_id_base = str(uuid.uuid4())
     # La extensión se determinará dentro de text_to_speech basado en el engine
-    temp_audio_base_filename_no_ext = f"direct_tts_{unique_id_base}" 
+    temp_audio_base_filename_no_ext = f"direct_tts_{unique_id_base}"
     temp_audio_base_path = os.path.join(OUTPUT_FOLDER, temp_audio_base_filename_no_ext)
 
-    tts_processor = PDFToAudioOCR(pdf_path="", 
-                                  output_txt_path="", 
-                                  output_audio_path=temp_audio_base_path, # Pasamos la base sin extensión
-                                  lang=lang, tts_engine=tts_engine, piper_voice_key=piper_voice_key)
-    
+    try:
+        tts_processor = PDFToAudioOCR(pdf_path="", # nos e usa
+                                    output_txt_path="", # No se usa
+                                    output_audio_base_path=temp_audio_base_path, # Pasamos la base sin extensión
+                                    lang=lang, tts_engine=tts_engine, piper_voice_key=piper_voice_key)
+    except Exception as e_init: # Captura errores de inicialización del motor (ej. Piper mal configurado)
+        return jsonify({"error": f"Error inicializando el motor TTS: {str(e_init)}"}), 500
+
     generated_audio_paths = []
     audio_file_urls = []
 

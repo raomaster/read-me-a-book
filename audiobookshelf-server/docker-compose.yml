@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # Servicio de Audiobookshelf (sin cambios)
+  audiobookshelf:
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    container_name: audiobookshelf
+    ports:
+      - "13376:80"
+    environment:
+      - PUID=1000  # Cambia por tu `id -u`
+      - PGID=1000  # Cambia por tu `id -g`
+      - TZ=America/Santiago
+    volumes:
+      - ./data/config:/config
+      - ./data/metadata:/metadata
+      - ./media/audiobooks:/audiobooks
+      - ./media/ebooks:/ebooks
+      - ./media/comics:/comics
+      - ./media/podcasts:/podcasts
+    restart: unless-stopped
+
+   # SERVICIO TAILSCALE MODIFICADO PARA WINDOWS
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    hostname: mi-servidor-libros
+    
+    # === LA MODIFICACIÓN CLAVE ===
+    # Esta línea le dice al contenedor que use la pila de red de tu Windows,
+    # en lugar de la red virtual y aislada de Docker.
+    # Esto resuelve el problema de enrutamiento.
+    network_mode: host
+    
+    environment:
+      - TS_STATE_DIR=/var/lib/tailscale
+      # La variable TS_ROUTES no es necesaria con network_mode: host
+    
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale
+      # La siguiente línea es para Linux y puede causar errores en Windows.
+      # La comentamos porque con network_mode: host no es necesaria.
+      # - /dev/net/tun:/dev/net/tun
+    
+    # Estas capacidades son principalmente para Linux. No dañan, pero son
+    # menos relevantes con network_mode: host. Las dejamos por compatibilidad.
+    cap_add:
+      - net_admin
+      - sys_module
+    restart: unless-stopped
