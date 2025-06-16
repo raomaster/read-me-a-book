@@ -1,0 +1,3 @@
+# requirements.txt (tu proyecto principal)
+
+TTS==0.21.1
