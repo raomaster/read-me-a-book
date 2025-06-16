@@ -20,3 +20,5 @@ output/*
 *.log
 .env
 *.onnx
+models/**/*.onnx
+backend/models/**/*.onnx
