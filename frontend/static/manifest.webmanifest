@@ -1,0 +1,16 @@
+{
+	"name": "Read Me a Book",
+	"short_name": "BookReader",
+	"description": "An EPUB reader application.",
+	"start_url": "/",
+	"display": "standalone",
+	"background_color": "#f3f4f6",
+	"theme_color": "#4f46e5",
+	"icons": [
+		{
+			"src": "favicon.png",
+			"sizes": "192x192",
+			"type": "image/png"
+		}
+	]
+}
