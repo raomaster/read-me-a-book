@@ -7,6 +7,7 @@ export interface Book {
     file: File
     coverUrl: string
     title: string
+    data: ArrayBuffer
 }
 
 
@@ -15,13 +16,13 @@ class BookStoreService {
 
     public readonly subscribe = this.#store.subscribe
 
-    public async addBook(book: File): Promise<void> {
+    public async addBook(bookFile: File): Promise<void> { // Cambiado el nombre del parámetro para claridad
         try {
-            const processedBook = await this.#processEpubFile(book)
+            const processedBook = await this.#processEpubFile(bookFile)
             this.#store.update(books => {
-                // Prevent ducplicates
+                // Prevent duplicates
                 if (books.some(b => b.id === processedBook.id)) {
-                    // get dupblicated so we respond with the same array
+                    // get duplicated so we respond with the same array
                     return books
                 }
                 // if not duplicate we respond with the array + new book
@@ -34,34 +35,47 @@ class BookStoreService {
         }
     }
     
-    // Generate an Epub Object with the file and metadata
-    #processEpubFile(book: File): Promise<Book> {
+    // Generate an Epub Object with the file and metadata 
+    #processEpubFile(bookFile: File): Promise<Book> { // Cambiado el nombre del parámetro
         return new Promise((resolve, reject) => {
             const reader = new FileReader()
 
             reader.onload = async () => {
                 try {
-                    const bookingStance = ePub(reader.result as ArrayBuffer)
-                    const metadata = await bookingStance.loaded.metadata
-                    const coverUrl = await bookingStance.coverUrl()
+                    console.log('BookStore: FileReader onload. reader.result type:', typeof reader.result, 'reader.result:', reader.result); // <-- DEBUG LOG
+                    
+                    const arrayBuffer = reader.result as ArrayBuffer; // Guardar el ArrayBuffer
+                    const bookInstance = ePub(arrayBuffer) // Usar ArrayBuffer para epubjs
+                    const metadata = await bookInstance.loaded.metadata
+                    const coverUrl = await bookInstance.coverUrl() // Esto puede devolver null
 
-                    bookingStance.destroy()
+                    bookInstance.destroy() // Importante para liberar recursos
 
                     resolve({
-                        id: book.name,
-                        file: book,
-                        coverUrl: coverUrl || '',
-                        title: metadata.title || 'Unknow Title'
-                    })
+                        id: bookFile.name,
+                        file: bookFile,
+                        coverUrl: coverUrl || '', // Asegurar que sea una cadena, incluso si es vacía
+                        title: metadata.title || 'Unknown Title', // Título por defecto y corrección tipográfica
+                        data: arrayBuffer // <--- AÑADIR ESTO: Guardar el ArrayBuffer en el objeto Book
+                    });
+                    console.log('BookStore: #processEpubFile resolved for:', bookFile.name, 'with title:', metadata.title); // Log de éxito
+
 
                 } catch (error) {
-                    // Epub filed! reject
+                    // Epub failed! reject
+                    console.error("Error processing EPUB with epubjs:", error);
                     reject(error)
                 }
             }
+
+            reader.onerror = () => {
+                console.error("FileReader error reading file:", reader.error);
+                reject(reader.error || new Error("FileReader failed to read the file."));
+            }
+
+            reader.readAsArrayBuffer(bookFile) // Leer el archivo como ArrayBuffer. Movido dentro de la Promise.
         })
     }
 
 }
-
 export const bookStore = new BookStoreService()

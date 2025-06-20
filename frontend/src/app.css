@@ -3,6 +3,21 @@
 @plugin '@tailwindcss/typography';
 /* @plugin '@tailwindcss/typography'; */
 
+
+
+@layer components {
+	.filled-button {
+		@apply inline-flex items-center justify-center px-4 py-2 
+           font-semibold text-on-primary bg-primary 
+           rounded-md shadow-sm 
+           transition-colors duration-200 
+           hover:bg-primary-hover
+           focus-visible:outline-none focus-visible:ring-2 
+           focus-visible:ring-primary focus-visible:ring-offset-2 
+           focus-visible:ring-offset-surface;
+	}
+}
+
 /*
   We add our theme variables inside the 'base' layer.
   This ensures they are loaded early and have low specificity,
@@ -15,17 +30,15 @@
     for Tailwind's opacity modifiers to work correctly (e.g., bg-primary/50).
   */
 	[data-theme='light'] {
-		/* Google-inspired palette for better visual separation */
-		--color-primary: 79 70 229;        /* Tailwind Indigo 600 */
-
-		/* Neutral grays that don't compete with the primary color */
-		--color-background: 243 244 246;  /* Neutral gray-100 */
-		--color-surface: 255 255 255;      /* white */
-		--color-text-base: 17 24 39;       /* Neutral gray-900 */
-		--color-text-muted: 107 114 128;   /* Neutral gray-500 */
-		--color-border: 229 231 235;      /* Neutral gray-200 */
-		
-		/* White text provides the best contrast on the Indigo background */
+		--color-primary: 79 70 229; /* indigo-600 */
+		--color-primary-hover: 67 56 202; /* indigo-700 */
+		--color-secondary: 107 114 128; /* gray-500 */
+		--color-background: 243 244 246; /* gray-100 */
+		--color-surface: 255 255 255; /* white */
+		--color-surface-hover: 249 250 251; /* gray-50 */
+		--color-border: 229 231 235; /* gray-200 */
+		--color-text-base: 17 24 39; /* gray-900 */
+		--color-text-muted: 107 114 128; /* gray-500 */
 		--color-text-on-primary: 255 255 255; /* white */
 	}
 
@@ -35,12 +48,14 @@
   */
 	[data-theme='dark'] {
 		--color-primary: 59 130 246; /* blue-500 */
+		--color-primary-hover: 37 99 235; /* blue-600 */
 		--color-secondary: 156 163 175; /* gray-400 */
 		--color-background: 17 24 39; /* gray-900 */
 		--color-surface: 31 41 55; /* gray-800 */
+		--color-surface-hover: 55 65 81; /* gray-700 */
+		--color-border: 55 65 81; /* gray-700 */
 		--color-text-base: 249 250 251; /* gray-50 */
 		--color-text-muted: 156 163 175; /* gray-400 */
-		--color-border: 55 65 81; /* gray-700 */
 		--color-text-on-primary: 255 255 255; /* white */
 	}
 
@@ -48,13 +63,15 @@
     Theme: Princess
   */
 	[data-theme='princess'] {
-		--color-primary: 192 38 211; /* fuchsia-600 */
-		--color-secondary: 217 70 239; /* fuchsia-500 */
-		--color-background: 253 242 248; /* pink-50 */
+		--color-primary: 236 72 153; /* pink-500 */
+		--color-primary-hover: 219 39 119; /* pink-600 */
+		--color-secondary: 251 146 156; /* rose-400 */
+		--color-background: 255 241 242; /* rose-50 */
 		--color-surface: 255 255 255; /* white */
-		--color-text-base: 131 24 67; /* pink-900 */
-		--color-text-muted: 192 38 211; /* fuchsia-600 */
-		--color-border: 252 231 243; /* pink-100 */
+		--color-surface-hover: 255 228 230; /* rose-100 */
+		--color-border: 254 205 211; /* rose-200 */
+		--color-text-base: 136 19 55; /* rose-900 */
+		--color-text-muted: 225 29 72; /* rose-600 */
 		--color-text-on-primary: 255 255 255; /* white */
 	}
 
@@ -62,13 +79,19 @@
     Theme: Ocean (Blue)
   */
 	[data-theme='ocean'] {
-		--color-primary: 14 116 144; /* cyan-700 */
-		--color-secondary: 20 184 166; /* teal-500 */
-		--color-background: 236 254 255; /* cyan-50 */
-		--color-surface: 255 255 255; /* white */
-		--color-text-base: 21 94 117; /* cyan-900 */
-		--color-text-muted: 20 184 166; /* teal-500 */
-		--color-border: 165 243 252; /* cyan-200 */
+		--color-primary: 20 184 166; /* teal-500 */
+		--color-primary-hover: 13 148 136; /* teal-600 */
+		--color-secondary: 107 114 128; /* cyan-400 */
+		--color-background: 18 38 63; /* cyan-950 - Ajustado de repo original */
+		--color-surface: 28 50 78; /* cyan-900 - Ajustado de repo original */
+		--color-surface-hover: 34 60 94; /* cyan-800 - Ajustado de repo original */
+		--color-border: 41 73 114; /* cyan-700 - Ajustado de repo original */
+		--color-text-base: 236 254 255; /* cyan-50 */
+		--color-text-muted: 165 243 252; /* cyan-200 */
 		--color-text-on-primary: 255 255 255; /* white */
+	}
+
+	body {
+		@apply bg-background text-text-base font-sans;
 	}
 }
