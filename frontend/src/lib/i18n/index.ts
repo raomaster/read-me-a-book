@@ -13,14 +13,16 @@ const getInitialLocale = (): string => {
             return storeLocale;
         }
     }
-    return getLocaleFromNavigator()?.split('-')[0] || 'es';
-}
+    const navigatorLocale = getLocaleFromNavigator();
+    
+    return (navigatorLocale === 'en' || navigatorLocale === 'es') ? navigatorLocale : 'es';
+};
 
 
 
 init({
     fallbackLocale: 'es',
-    initialLocale: getLocaleFromNavigator()
+    initialLocale: getInitialLocale()
 });
 
 export function setLocale(newLocale: string): void {

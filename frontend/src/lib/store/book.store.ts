@@ -46,19 +46,23 @@ class BookStoreService {
                     
                     const arrayBuffer = reader.result as ArrayBuffer; // Guardar el ArrayBuffer
                     const bookInstance = ePub(arrayBuffer) // Usar ArrayBuffer para epubjs
-                    const metadata = await bookInstance.loaded.metadata
+                    // Esperar a que los metadatos estén cargados
+                    await bookInstance.ready; // Espera a que el libro esté listo (incluye parsing de metadatos)
+                    const metadata = bookInstance.packaging?.metadata; // Acceder a los metadatos después de 'ready'
+                    const title = metadata?.title || bookFile.name.replace(/\.epub$/i, '') || 'Unknown Title';
+
                     const coverUrl = await bookInstance.coverUrl() // Esto puede devolver null
 
-                    bookInstance.destroy() // Importante para liberar recursos
+                    //bookInstance.destroy() // Importante para liberar recursos
 
                     resolve({
                         id: bookFile.name,
                         file: bookFile,
                         coverUrl: coverUrl || '', // Asegurar que sea una cadena, incluso si es vacía
-                        title: metadata.title || 'Unknown Title', // Título por defecto y corrección tipográfica
+                        title: title,
                         data: arrayBuffer // <--- AÑADIR ESTO: Guardar el ArrayBuffer en el objeto Book
                     });
-                    console.log('BookStore: #processEpubFile resolved for:', bookFile.name, 'with title:', metadata.title); // Log de éxito
+                    console.log('BookStore: #processEpubFile resolved for:', bookFile.name, 'with title:', title); // Log de éxito
 
 
                 } catch (error) {

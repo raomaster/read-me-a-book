@@ -1,12 +1,19 @@
 <script lang="ts">
 	// Importaciones necesarias de Svelte y otras librerías
-	import { onMount, tick } from 'svelte'; // Para ejecutar código cuando el componente se monta en el DOM
+	import { onMount, tick } from 'svelte';
 	import { page } from '$app/stores'; // Store de SvelteKit para acceder a información de la página actual (ej. parámetros de URL)
 	import { bookStore, type Book } from '$lib/store/book.store'; // Nuestro store de libros y la interfaz Book
 	import ePub, { type Rendition, type Book as EpubBookInstance } from 'epubjs'; // Librería para manejar y renderizar EPUBs
-	import { ArrowLeft, ChevronLeft, ChevronRight } from '@lucide/svelte'; // Iconos para la UI
+	import { ArrowLeft, Settings } from '@lucide/svelte'; // Iconos para la UI.
 	import { goto } from '$app/navigation'; // Para navegar programáticamente a otras rutas
 	import { _ } from 'svelte-i18n'; // Store para las traducciones
+	import { browser } from '$app/environment';
+
+	import themeStore, { type Theme } from '$lib/store/theme.store';
+	import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
+	import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
+	import { clickOutside } from '$lib/actions/clickOutside.action';
+	import FontSizeSwitcher from '$lib/components/FontSizeSwitcher.svelte';
 
 	// --- Variables de estado del componente ---
 	let currentBook: Book | undefined; // Almacenará el objeto del libro que se está leyendo
@@ -16,6 +23,14 @@
 	let isLoading = true; // Booleano para controlar el estado de carga
 	let errorMessage: string | undefined; // Para almacenar mensajes de error si algo falla
 	let currentChapterTitle = ''; // Título del capítulo actual que se está mostrando
+
+
+	// Variables para la barra de progreso y ubicaciones
+	let currentPercentage = 0; // Porcentaje actual de lectura (0 a 1)
+	let locationsTotal = 0; // Número total de "páginas" según las ubicaciones de epubjs
+	let currentPageInLocations = 0; // Número de página actual (basado en 1)
+	let isLoadingLocations = false; // Indicador para la generación de ubicaciones
+	let isSettingsOpen = false;
 
 	onMount(() => {
 		// Ensure epubInstance and rendition are reset if the component re-initializes
@@ -29,6 +44,11 @@
 			}
 			rendition = undefined;
 		};
+		// Resetear estados de progreso también
+		currentPercentage = 0;
+		locationsTotal = 0;
+		currentPageInLocations = 0;
+		isLoadingLocations = false;
 
 		const initEpubViewer = async () => {
 			cleanupPreviousInstance(); // Primero, limpiar cualquier instancia previa del visor EPUB
@@ -66,18 +86,18 @@
 			isLoading = false;
 
 			// Wait for Svelte to update the DOM and bind viewerElement.
-			// Using await new Promise ensures we wait for the next microtask queue,
+			// Using await tick() ensures we wait for the next microtask queue,
 			// allowing Svelte to process pending updates.
 			// Esperar un "tick" del ciclo de Svelte para que el DOM se actualice y viewerElement se vincule.
 			// Esto es crucial porque el div#viewer se renderiza condicionalmente basado en isLoading.
 			if (!viewerElement) {
-				await tick();
+				await tick(); // Esperar a que Svelte actualice el DOM
 			}
 
 			// After the tick, viewerElement should be bound if the conditions for its rendering were met.
 			// Después del tick, verificar si viewerElement está realmente disponible.
 			if (!viewerElement) {
-				console.error("EPUB viewer element (#viewer) still not found in DOM after isLoading=false and tick.");
+				console.error('EPUB viewer element (#viewer) still not found in DOM after isLoading=false and tick.');
 				errorMessage = $_('reader.error.epubLoadFailed', { default: 'Viewer element failed to render.' });
 				// isLoading ya es false, así que no es necesario cambiarlo aquí.
 				return;
@@ -109,9 +129,99 @@
 					currentChapterTitle = navItem?.label?.trim() || '';
 				});
 				
+				// Manejar cambios de ubicación para la barra de progreso
+				tempRendition.on('locationChanged', (location: any) => {
+					if (epubInstance?.locations) {
+						// Forzamos el tipo a 'any' para acceder a 'start.cfi' y confiamos en las verificaciones de nulidad.
+						const startLocationObject = (location as any)?.start;
+						if (!startLocationObject || typeof startLocationObject.cfi !== 'string') {
+							return;
+						}
+
+						const cfi = startLocationObject.cfi;
+						currentPercentage = epubInstance.locations.percentageFromCfi(cfi);
+						// Actualizar números de página si las ubicaciones están cargadas
+						if (locationsTotal > 0 && epubInstance.locations) { // Asegurarse de que locations exista
+							const loc = epubInstance.locations.load(cfi);
+							// epubjs locations.load() puede devolver un objeto con page o un string CFI.
+							// Necesitamos manejar ambos casos o asegurarnos del tipo.
+							// Por ahora, asumimos que si es un objeto, tiene 'page'.
+							currentPageInLocations = typeof loc === 'object' && loc && 'page' in loc ? (loc as any).page as number : 0;
+						}
+					} else {
+						// Fallback si locations aún no está listo
+						// Podríamos estimar el porcentaje basado en el CFI si es necesario,
+						// pero por ahora, simplemente no actualizamos la página/total si locations no está listo.
+					}
+				});
+
+
+				// Generar ubicaciones para la barra de progreso
+				isLoadingLocations = true;
+
+				await tempEpubInstance.locations.generate(1000);   // ⏳ genera “páginas”
+
+				locationsTotal        = tempEpubInstance.locations.length();
+				currentPercentage     = 0;                       // o calcula desde currentLocation()
+				currentPageInLocations= 1;
+				isLoadingLocations    = false;   // ← spinner OFF
+				// 1000 es un factor de granularidad, más alto significa más ubicaciones (progreso más preciso)
+				console.log('EPUB.js: Calling locations.generate(1000)');
+				// tempEpubInstance.locations.generate(1000);
+
 				// Si todo fue exitoso, asignar las instancias temporales a las variables del componente.
 				epubInstance = tempEpubInstance;
 				rendition = tempRendition;
+
+				// Registrar temas para el contenido del EPUB
+				rendition.themes.register('dark-epub', {
+					body: { color: 'rgb(229 231 235)', 'background-color': 'rgb(31 41 55)' }, // text-gray-200, bg-gray-800 (ejemplo)
+					'a, a:link, a:visited': { color: 'rgb(129 140 248)', 'text-decoration': 'underline' }, // indigo-400 (ejemplo)
+					'p, li, h1, h2, h3, h4, h5, h6, span, div': { color: 'rgb(229 231 235) !important' }
+				});
+				rendition.themes.register('light-epub', {
+					body: { color: 'rgb(17 24 39)', 'background-color': 'rgb(255 255 255)' }, // text-gray-900, bg-white (ejemplo)
+					'a, a:link, a:visited': { color: 'rgb(79 70 229)', 'text-decoration': 'underline' }, // indigo-600 (ejemplo)
+					'p, li, h1, h2, h3, h4, h5, h6, span, div': { color: 'rgb(17 24 39) !important' }
+				});
+
+				applyEpubTheme($themeStore); // Aplicar tema inicial
+
+				// Escuchar la finalización de la generación de ubicaciones
+				if (epubInstance) { // El listener va en la instancia del libro
+					epubInstance.on('locationsGenerated', (locationsGenerated: any) => { // Renombrado parámetro para evitar confusión con variable global
+						try {
+							console.log('EPUB.js: Event "locationsGenerated" fired. Locations data:', locationsGenerated);
+							if (epubInstance?.locations) { // Doble verificación por si acaso
+								locationsTotal = epubInstance.locations.length();
+								isLoadingLocations = false;
+								console.log(`EPUB.js: isLoadingLocations set to false. Total locations: ${locationsTotal}`);
+								if (rendition) { // Asegurarse que rendition exista
+									// Actualizar porcentaje y página inicial después de que las ubicaciones estén listas
+									// Esto es importante si el libro ya estaba abierto en una posición específica
+									const currentLocationObject = rendition.currentLocation();
+
+									// El objeto Location de epubjs tiene una propiedad 'start' que contiene el CFI.
+									// Forzamos 'any' para el acceso directo y confiamos en las verificaciones.
+									const startOfCurrentLocation = (currentLocationObject as any)?.start;
+									if (!startOfCurrentLocation || typeof startOfCurrentLocation.cfi !== 'string') {
+										console.warn('EPUB.js: Could not get CFI from current location on locationsGenerated.');
+										return;
+									}
+
+									const cfi = startOfCurrentLocation.cfi;
+									currentPercentage = epubInstance.locations.percentageFromCfi(cfi);
+									const loc = epubInstance.locations.load(cfi);
+									currentPageInLocations = typeof loc === 'object' && loc && 'page' in loc ? loc.page as number : 0;
+								}
+							}
+						} catch (err) {
+							console.error('EPUB.js: Error inside "locationsGenerated" callback:', err);
+							isLoadingLocations = false; // Asegurarse de que no se quede cargando indefinidamente
+						} // Fin del if (epubInstance?.locations)
+					});
+				}
+
 				// isLoading ya se estableció a false antes para permitir el renderizado del viewerElement.
 
 			} catch (error) {
@@ -137,24 +247,159 @@
 			errorMessage = undefined;
 			currentBook = undefined;
 			currentChapterTitle = '';
+			isLoadingLocations = false; // Asegurar que se resetee
 		};
 	});
 
-	// Función para navegar a la página siguiente del libro.
-	function nextPage() {
-		if (rendition) {
-			// Solo intentar avanzar si la rendition (el objeto de renderizado) existe.
-			rendition.next();
+	// Las funciones nextPage y prevPage ya no son necesarias
+
+	function applyEpubTheme(theme: Theme | null) {
+		if (rendition && theme) {
+			// Asumimos que 'princess' y 'ocean' son temas oscuros o tienen un equivalente oscuro.
+			if (theme === 'dark' || theme === 'princess' || theme === 'ocean') {
+				rendition.themes.select('dark-epub');
+			} else { // 'light' o cualquier otro tema no oscuro
+				rendition.themes.select('light-epub');
+			}
 		}
 	}
 
-	// Función para navegar a la página anterior del libro.
-	function prevPage() {
-		if (rendition) {
-			// Solo intentar retroceder si la rendition existe.
-			rendition.prev();
+	// Reaccionar a los cambios del tema global
+	$: if (browser && rendition && $themeStore) {
+		applyEpubTheme($themeStore);
+	}
+
+	function toggleSettings() {
+		isSettingsOpen = !isSettingsOpen;
+	}
+	function closeSettings() {
+		isSettingsOpen = false;
+	}
+
+	// --- Lógica de la Barra de Progreso ---
+	let progressBarElement: HTMLDivElement | undefined;
+	let isDraggingProgressBar = false;
+	let tooltipText = ''; // Texto para el tooltip
+
+	function handleProgressBarInteraction(event: MouseEvent) {
+		if (!rendition || !epubInstance?.locations || !progressBarElement) return;
+
+		const rect = progressBarElement.getBoundingClientRect();
+		const clickX = event.clientX - rect.left;
+		let percentage = clickX / rect.width;
+
+		// Asegurar que el porcentaje esté entre [0, 1]
+		percentage = Math.max(0, Math.min(1, percentage));
+
+		const cfi = epubInstance.locations.cfiFromPercentage(percentage);
+		if (cfi) {
+			if (event.type === 'mousedown' || (event.type === 'mousemove' && isDraggingProgressBar)) { // Solo navega si es click o drag activo
+				rendition.display(cfi);
+			}
+			// Actualizar texto del tooltip
+			if (epubInstance.locations) {
+				const loc = epubInstance.locations.load(cfi);
+				// Verificar si loc es un objeto y tiene la propiedad 'page' antes de acceder a ella
+				const pageNum = typeof loc === 'object' && loc && 'page' in loc ? (loc as any).page as number : 0;
+				const percentageDisplay = Math.round(percentage * 100);
+				tooltipText = `${percentageDisplay}% (${pageNum} / ${locationsTotal})`;
+			} else if (percentage !== currentPercentage) { // Mostrar solo porcentaje si locations no está listo y el porcentaje cambia
+				const percentageDisplay = Math.round(percentage * 100);
+				tooltipText = `${percentageDisplay}%`; // No mostrar pageNum/locationsTotal if locations not ready
+			} else {
+				tooltipText = `${Math.round(percentage * 100)}%`; // Fallback si locations no está listo
+			}
 		}
 	}
+
+	function handleProgressBarMouseDown(event: MouseEvent) {
+		isDraggingProgressBar = true;
+		handleProgressBarInteraction(event); // Mover inmediatamente al hacer clic
+		document.addEventListener('mousemove', handleProgressBarMouseMove);
+		document.addEventListener('mouseup', handleProgressBarMouseUp);
+	}
+
+	function handleProgressBarMouseMove(event: MouseEvent) {
+		if (isDraggingProgressBar) {
+			handleProgressBarInteraction(event); // Actualizar posición mientras se arrastra
+		}
+	}
+
+	function handleProgressBarMouseUp() {
+		isDraggingProgressBar = false;
+		document.removeEventListener('mousemove', handleProgressBarMouseMove);
+		document.removeEventListener('mouseup', handleProgressBarMouseUp);
+		// No limpiar tooltipText aquí para que permanezca visible hasta mouseleave
+	}
+
+	function handleProgressBarKeyboard(event: KeyboardEvent) {
+		if (!rendition || !epubInstance?.locations || !progressBarElement) return;
+
+		let newPercentage = currentPercentage;
+		const step = 0.01; // Mover 1% con cada tecla de flecha
+
+		switch (event.key) {
+			case 'ArrowLeft':
+			case 'ArrowDown': // Algunas implementaciones usan ArrowDown para disminuir
+				newPercentage = Math.max(0, currentPercentage - step);
+				event.preventDefault(); // Prevenir scroll de página
+				break;
+			case 'ArrowRight':
+			case 'ArrowUp': // Algunas implementaciones usan ArrowUp para aumentar
+				newPercentage = Math.min(1, currentPercentage + step);
+				event.preventDefault(); // Prevenir scroll de página
+				break;
+			case 'Home':
+				newPercentage = 0;
+				event.preventDefault();
+				break;
+			case 'End':
+				newPercentage = 1;
+				event.preventDefault();
+				break;
+			default:
+				return; // No hacer nada para otras teclas
+		}
+
+		const cfi = epubInstance.locations.cfiFromPercentage(newPercentage);
+		if (cfi) {
+			rendition.display(cfi);
+			// Actualizar tooltip si es necesario (opcional para teclado)
+			if (epubInstance.locations) {
+				const loc = epubInstance.locations.load(cfi);
+				const pageNum = typeof loc === 'object' && loc && 'page' in loc ? (loc as any).page as number : 0;
+				const percentageDisplay = Math.round(newPercentage * 100);
+				tooltipText = `${percentageDisplay}% (${pageNum} / ${locationsTotal})`;
+			}
+		}
+	}
+
+	// Navegación global con flechas izquierda/derecha (para pasar página)
+	function handleGlobalKeyDown(event: KeyboardEvent) {
+		// Solo navegar si la rendition está lista y el foco no está en un elemento interactivo
+		const target = event.target as HTMLElement;
+		if (rendition && !isDraggingProgressBar && target.tagName !== 'INPUT' && target.tagName !== 'SELECT' && target.tagName !== 'TEXTAREA' && target.getAttribute('role') !== 'slider') {
+			if (event.key === 'ArrowLeft') {
+				rendition.prev();
+				event.preventDefault(); // Prevenir scroll de página
+			} else if (event.key === 'ArrowRight') {
+				rendition.next();
+				event.preventDefault(); // Prevenir scroll de página
+			}
+		}
+	}
+
+	function updateTooltipOnFocus() {
+		if (rendition && epubInstance?.locations && locationsTotal > 0 && progressBarElement) {
+			const percentageDisplay = Math.round(currentPercentage * 100);
+			tooltipText = `${percentageDisplay}% (${currentPageInLocations} / ${locationsTotal})`;
+		} else if (currentPercentage >= 0 && progressBarElement) { // Mostrar solo % si no hay locations o están cargando
+			tooltipText = `${Math.round(currentPercentage * 100)}%`;
+		} else {
+			tooltipText = ''; // O un valor por defecto si se prefiere
+		}
+	}
+
 </script>
 
 <svelte:head>
@@ -171,7 +416,7 @@
 </svelte:head>
 
 <div class="flex flex-col h-screen bg-background text-text-base">
-	{#if currentBook && !isLoading && !errorMessage }
+	{#if !isLoading && !errorMessage } <!-- Header unificado: se muestra si no hay carga ni error -->
 		<header class="flex items-center justify-between p-3 border-b border-border shadow-sm bg-surface flex-shrink-0">
 			<button
 				on:click={() => goto('/')}
@@ -180,25 +425,43 @@
 			>
 				<ArrowLeft size={24} />
 			</button>
-			<div class="text-center overflow-hidden mx-2">
-				<h1 class="text-lg font-semibold truncate" title={currentBook.title}>{currentBook.title}</h1>
-				{#if currentChapterTitle}
-					<p class="text-xs text-text-muted truncate" title={currentChapterTitle}>{currentChapterTitle}</p>
+			<div class="text-center overflow-hidden mx-2 flex-grow">
+				{#if currentBook}
+					<h1 class="text-lg font-semibold truncate" title={currentBook.title}>{currentBook.title}</h1>
+					{#if currentChapterTitle}
+						<p class="text-xs text-text-muted truncate" title={currentChapterTitle}>{currentChapterTitle}</p>
+					{/if}
+				{:else}
+					<h1 class="text-lg font-semibold truncate">{$_('reader.pageTitle', { default: 'Reader' })}</h1>
 				{/if}
 			</div>
-			<div class="w-10 flex-shrink-0" />
-		</header>
-	{:else if !isLoading && !errorMessage}
-		<header class="flex items-center justify-start p-3 border-b border-border shadow-sm bg-surface flex-shrink-0">
-			<button
-				on:click={() => goto('/')}
-				class="p-2 rounded-md hover:bg-surface-hover text-text-muted hover:text-text-base"
-				aria-label={$_('reader.backToLibrary', { default: 'Back to library' })}
-			>
-				<ArrowLeft size={24} />
-			</button>
-			<div class="text-center overflow-hidden mx-2">
-				<h1 class="text-lg font-semibold truncate">{$_('reader.pageTitle', { default: 'Reader' })}</h1>
+			<div class="w-10 flex-shrink-0">
+				<!-- Botón de settings -->
+				{#if rendition} <!-- Botón de settings solo si el libro está cargado y renderizado -->
+				<div class="relative">
+					<button
+						on:click={toggleSettings}
+						class="p-2 rounded-md hover:bg-surface-hover text-text-muted hover:text-text-base"
+						aria-label="Open settings"
+						aria-haspopup="true"
+						aria-expanded={isSettingsOpen}
+					>
+						<Settings size={24} />
+					</button>
+					{#if isSettingsOpen}
+					<div
+						class="absolute top-full right-0 mt-2 w-56 bg-surface border border-border rounded-lg shadow-xl z-20 p-2"
+						role="menu"
+						use:clickOutside
+						on:click_outside={closeSettings}
+					>
+						<div class="px-2 py-1"><ThemeSwitcher /></div>
+						<div class="px-2 py-1"><LanguageSwitcher /></div>
+						<div class="px-2 py-1"><FontSizeSwitcher currentRendition={rendition} /></div>
+					</div>
+					{/if}
+				</div>
+				{/if}
 			</div>
 		</header>
 	{/if}
@@ -211,15 +474,58 @@
 				<p class="text-lg text-red-500">{errorMessage}</p>
 				<button on:click={() => goto('/')} class="mt-4 filled-button">{$_('reader.backToLibrary', { default: 'Back to Library' })}</button>
 			</div>
-		{:else}
-			<div bind:this={viewerElement} id="viewer" class="w-full h-full epub-viewer-container" />
+		{:else} <!-- Si no está cargando y no hay error, mostrar el visor -->
+			<div bind:this={viewerElement} id="viewer" class="w-full h-full epub-viewer-container pb-16"></div>
 			
-			{#if rendition}
-			<div class="fixed bottom-0 left-0 right-0 flex justify-between p-2 bg-surface/80 backdrop-blur-sm border-t border-border shadow-up">
-				<button on:click={prevPage} class="p-2 rounded-md hover:bg-surface-hover text-text-muted hover:text-text-base" aria-label={$_('reader.previousPage', { default: 'Previous Page' })}><ChevronLeft size={28} /></button>
-				<button on:click={nextPage} class="p-2 rounded-md hover:bg-surface-hover text-text-muted hover:text-text-base" aria-label={$_('reader.nextPage', { default: 'Next Page' })}><ChevronRight size={28} /></button>
+			<!-- Pie de página con Barra de Progreso -->
+			{#if rendition} <!-- La barra de progreso solo se muestra si la rendition está lista -->
+				<div class="fixed bottom-0 left-0 right-0 p-3 bg-surface/90 backdrop-blur-sm border-t border-border shadow-up flex flex-col items-center justify-center">
+					{#if isLoadingLocations}
+					<p class="text-center text-sm text-text-muted">{$_('reader.loadingProgress', { default: 'Loading progress...' })}</p>
+				{:else if rendition && epubInstance?.locations && locationsTotal > 0}
+					<div class="w-full max-w-xl mx-auto relative">
+						<div
+							class="relative h-2.5 bg-border rounded-full cursor-pointer group"
+							on:click|stopPropagation={handleProgressBarInteraction}
+							on:mousedown|stopPropagation={handleProgressBarMouseDown}
+							on:mousemove={handleProgressBarInteraction} 
+							on:mouseleave={() => { if (!isDraggingProgressBar) tooltipText = ''; }}
+							on:focus={updateTooltipOnFocus}
+							on:keydown={handleProgressBarKeyboard}
+							bind:this={progressBarElement}
+							role="slider"
+							aria-valuemin="0"
+							aria-valuemax="100"
+							aria-valuenow={Math.round(currentPercentage * 100)}
+							aria-label={$_('reader.readingProgress', { default: 'Reading progress' })}
+							tabindex="0"
+						>
+							<div class="absolute top-0 left-0 h-full bg-primary rounded-full"
+								 style="width: {currentPercentage * 100}%;"
+							></div>
+							<!-- Indicador Visual (Thumb) -->
+							<div class="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-primary rounded-full shadow-lg pointer-events-none transition-opacity opacity-0 group-hover:opacity-100"
+								 style="left: calc({currentPercentage * 100}% - 8px);"
+							></div>
+						</div>
+						<!-- Tooltip -->
+						{#if tooltipText && progressBarElement} <!-- Mostrar solo si hay texto y el elemento existe -->
+						<div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-surface border border-border rounded-md text-xs text-text-base whitespace-nowrap shadow-lg z-20">
+							{tooltipText}
+						</div>
+						{/if}
+						<p class="text-center text-sm text-text-muted mt-1.5">
+							{Math.round(currentPercentage * 100)}%
+							{#if currentPageInLocations > 0 && locationsTotal > 0}
+								({currentPageInLocations} / {locationsTotal})
+							{/if}
+						</p>
+					</div>
+				{:else}
+					<p class="text-center text-sm text-text-muted">{$_('reader.progressNotAvailable', { default: 'Progress not available' })}</p>
+				{/if}
 			</div>
-			{:else if !isLoading && !errorMessage} 
+			{:else} <!-- Fallback si rendition no está lista pero no hay error ni carga (después de que el visor se haya intentado renderizar) -->
 				<div class="absolute inset-0 flex flex-col items-center justify-center p-4 text-center">
 					<p>{$_('reader.error.unexpected', { default: 'Could not display the book.' })}</p>
 					<button on:click={() => goto('/')} class="mt-4 filled-button">{$_('reader.backToLibrary', { default: 'Back to Library' })}</button>
@@ -229,7 +535,29 @@
 	</main>
 </div>
 
+<svelte:window on:keydown={handleGlobalKeyDown} />
+
 <style>
+	/* Estilo para el contenedor relativo del tooltip si es necesario */
+	.relative {
+		position: relative;
+		/* Asegurarse de que el z-index sea suficiente si hay otros elementos fijos */
+	}
+	/* Estilos para el foco en la barra de progreso para accesibilidad */
+	[role="slider"]:focus-visible {
+		outline: 2px solid rgb(var(--color-primary));
+		outline-offset: 2px;
+	}
+	/* Eliminar el outline por defecto en elementos con tabindex si se prefiere un estilo de foco personalizado */
+	[tabindex="0"]:focus {
+		outline: none;
+	}
+
+	/* Asegurar que el thumb sea visible cuando la barra de progreso tiene foco */
+	[role="slider"]:focus-visible .absolute.top-1\/2.-translate-y-1\/2,
+	[role="slider"]:hover .absolute.top-1\/2.-translate-y-1\/2 {
+		opacity: 1;
+	}
 	.epub-viewer-container :global(.epub-view) {
 		user-select: text !important;
 		-webkit-user-select: text !important;
@@ -237,7 +565,7 @@
 		-ms-user-select: text !important;
 	}
 	#viewer {
-		height: 100%; 
+		/* padding-bottom es la clave para el pie de página */
 	}
 	.shadow-up {
 		box-shadow: 0 -4px 6px -1px rgb(0 0 0 / 0.1), 0 -2px 4px -2px rgb(0 0 0 / 0.1);

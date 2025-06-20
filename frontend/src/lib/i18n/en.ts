@@ -27,5 +27,15 @@ export default {
     },
     previousPage: "Previous Page",
     nextPage: "Next Page",
+    loadingProgress: "Loading progress...",
+    progressNotAvailable: "Progress not available",
+    readingProgress: "Reading progress:",
+    fontSizeLabel: "Font Size",
+    fontSizes: {
+      small: "Small",
+      normal: "Normal",
+      large: "Large",
+      extraLarge: "Extra Large"
+    }
   }
 };
