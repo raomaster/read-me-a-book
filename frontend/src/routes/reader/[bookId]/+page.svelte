@@ -119,6 +119,8 @@
 
 				// Mostrar el contenido del libro. Esto puede tomar un momento.
 				await tempRendition.display();
+				epubInstance = tempEpubInstance;
+				rendition = tempRendition;
 
 				// Escuchar el evento 'displayed' de la rendition para actualizar el título del capítulo.
 				// Este evento se dispara cada vez que una nueva sección/capítulo se muestra.
@@ -129,8 +131,8 @@
 					currentChapterTitle = navItem?.label?.trim() || '';
 				});
 				
-				// Manejar cambios de ubicación para la barra de progreso
-				tempRendition.on('locationChanged', (location: any) => {
+				// Manejar cambios de ubicación (evento correcto: 'relocated')
+				tempRendition.on('relocated', (location: any) => {
 					if (epubInstance?.locations) {
 						// Forzamos el tipo a 'any' para acceder a 'start.cfi' y confiamos en las verificaciones de nulidad.
 						const startLocationObject = (location as any)?.start;
@@ -156,22 +158,21 @@
 				});
 
 
-				// Generar ubicaciones para la barra de progreso
-				isLoadingLocations = true;
+				isLoadingLocations = true; 
+				tempEpubInstance.locations.generate(1000) 
+				.then(() => { 
+					locationsTotal = tempEpubInstance!.locations.length(); 
+					isLoadingLocations = false; 
+				}) 
+				.catch((err: unknown) => { 
+					console.error('Error generating locations', err); 
+					isLoadingLocations = false; 
+				});
 
-				await tempEpubInstance.locations.generate(1000);   // ⏳ genera “páginas”
-
-				locationsTotal        = tempEpubInstance.locations.length();
-				currentPercentage     = 0;                       // o calcula desde currentLocation()
-				currentPageInLocations= 1;
-				isLoadingLocations    = false;   // ← spinner OFF
-				// 1000 es un factor de granularidad, más alto significa más ubicaciones (progreso más preciso)
-				console.log('EPUB.js: Calling locations.generate(1000)');
-				// tempEpubInstance.locations.generate(1000);
 
 				// Si todo fue exitoso, asignar las instancias temporales a las variables del componente.
-				epubInstance = tempEpubInstance;
-				rendition = tempRendition;
+				// epubInstance = tempEpubInstance;
+				// rendition = tempRendition;
 
 				// Registrar temas para el contenido del EPUB
 				rendition.themes.register('dark-epub', {
@@ -313,6 +314,7 @@
 	}
 
 	function handleProgressBarMouseDown(event: MouseEvent) {
+		event.preventDefault();   
 		isDraggingProgressBar = true;
 		handleProgressBarInteraction(event); // Mover inmediatamente al hacer clic
 		document.addEventListener('mousemove', handleProgressBarMouseMove);
@@ -488,7 +490,6 @@
 							class="relative h-2.5 bg-border rounded-full cursor-pointer group"
 							on:click|stopPropagation={handleProgressBarInteraction}
 							on:mousedown|stopPropagation={handleProgressBarMouseDown}
-							on:mousemove={handleProgressBarInteraction} 
 							on:mouseleave={() => { if (!isDraggingProgressBar) tooltipText = ''; }}
 							on:focus={updateTooltipOnFocus}
 							on:keydown={handleProgressBarKeyboard}
@@ -500,13 +501,15 @@
 							aria-label={$_('reader.readingProgress', { default: 'Reading progress' })}
 							tabindex="0"
 						>
-							<div class="absolute top-0 left-0 h-full bg-primary rounded-full"
-								 style="width: {currentPercentage * 100}%;"
-							></div>
+							<!-- svelte-ignore element_invalid_self_closing_tag -->
+							<div class="absolute top-0 left-0 h-full bg-primary rounded-full" 
+								style:width="{currentPercentage * 100}%" 
+							/>
 							<!-- Indicador Visual (Thumb) -->
+							<!-- svelte-ignore element_invalid_self_closing_tag -->
 							<div class="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-primary rounded-full shadow-lg pointer-events-none transition-opacity opacity-0 group-hover:opacity-100"
-								 style="left: calc({currentPercentage * 100}% - 8px);"
-							></div>
+								style:left="calc({currentPercentage * 100}% - 8px)"
+							/>
 						</div>
 						<!-- Tooltip -->
 						{#if tooltipText && progressBarElement} <!-- Mostrar solo si hay texto y el elemento existe -->
