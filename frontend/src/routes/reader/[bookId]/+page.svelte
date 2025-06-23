@@ -4,7 +4,7 @@
 	import { page } from '$app/stores'; // Store de SvelteKit para acceder a información de la página actual (ej. parámetros de URL)
 	import { bookStore, type Book } from '$lib/store/book.store'; // Nuestro store de libros y la interfaz Book
 	import ePub, { type Rendition, type Book as EpubBookInstance } from 'epubjs'; // Librería para manejar y renderizar EPUBs
-	import { ArrowLeft, Settings } from '@lucide/svelte'; // Iconos para la UI.
+	import { ArrowLeft, Settings, Play, Pause, Loader2 } from '@lucide/svelte';
 	import { goto } from '$app/navigation'; // Para navegar programáticamente a otras rutas
 	import { _ } from 'svelte-i18n'; // Store para las traducciones
 	import { browser } from '$app/environment';
@@ -15,28 +15,6 @@
 	import { clickOutside } from '$lib/actions/clickOutside.action';
 	import FontSizeSwitcher from '$lib/components/FontSizeSwitcher.svelte';
 	import TtsConfigurator from '$lib/components/TTSConfigurator.svelte';
-
-	// --- HACK PARA EL PROBLEMA DE SANDBOX EN EPUB.JS 0.3.93 ---
-	// La versión 0.3.93 de epub.js hardcodea `sandbox="allow-same-origin"` en la creación de su iframe interno.
-	// Este hack intenta modificar el atributo sandbox del iframe *antes* de que se cargue el contenido.
-	// Es un parche muy específico y frágil para esta versión de la librería.
-	// Se coloca aquí para asegurar que se ejecute lo antes posible, antes de cualquier instanciación de ePub.
-	if (typeof window !== 'undefined' && (ePub as any).Rendition && (ePub as any).Rendition.View && (ePub as any).Rendition.View.Iframe && !(ePub as any).Rendition.View.Iframe.__patched__) {
-		console.log("EPUB.js Hack: Applying sandbox patch to IframeView.prototype.load (global scope)");
-		const originalIframeViewLoad = (ePub as any).Rendition.View.Iframe.prototype.load;
-		(ePub as any).Rendition.View.Iframe.prototype.load = function(contents: string) {
-			if (this.iframe) {
-				this.iframe.setAttribute("sandbox", "allow-same-origin allow-scripts allow-popups allow-forms allow-pointer-lock allow-top-navigation-by-user-activation");
-				console.log("EPUB.js Hack: Iframe sandbox attribute set during load:", this.iframe.getAttribute("sandbox"));
-			} else {
-				console.warn("EPUB.js Hack: Iframe not found when patching load method. This might indicate a deeper issue.");
-			}
-			const result = originalIframeViewLoad.apply(this, [contents]);
-			(ePub as any).Rendition.View.Iframe.__patched__ = true; // Marca como parcheado
-			return result;
-		};
-	}
-	// --- FIN DEL HACK ---
 
 	// --- Variables de estado del componente ---
 	let currentBook: Book | undefined; // Almacenará el objeto del libro que se está leyendo
@@ -60,6 +38,10 @@
 	let ttsLang: string = 'es';
 	let piperVoiceKey: string = 'es_MX-claude-high';
 	let currentAudio: HTMLAudioElement | null = null;
+	let isReadingContinuously = false; // Nuevo estado para controlar la lectura continua
+	let currentHighlightedCfi: string | null = null; // Nuevo estado para el CFI del texto resaltado
+	let isAudioPlaying = false; // Para controlar el estado de reproducción
+	let isAudioLoading = false; // Para mostrar un indicador de carga
 
 
 	let isSettingsOpen = false;
@@ -74,6 +56,11 @@
 				epubInstance.destroy();
 				epubInstance = undefined;
 			}
+			// Limpiar los datos de ubicaciones de epubjs del localStorage para evitar SyntaxError por datos corruptos.
+			if (browser) {
+				localStorage.removeItem('epubjs-locations');
+			}
+
 			rendition = undefined;
 		};
 		// Resetear estados de progreso también
@@ -157,11 +144,18 @@
 					width: '100%', // Ocupar todo el ancho disponible
 					height: '100%', // Ocupar toda la altura disponible
 					flow: 'paginated', // Flujo paginado, como un libro físico
-					spread: 'auto' // Intentar mostrar dos páginas si el espacio lo permite (ej. en pantallas anchas)
+					spread: 'auto', // Intentar mostrar dos páginas si el espacio lo permite (ej. en pantallas anchas)
+					allowScriptedContent: true
 				});
 
+				// Restaurar última posición de lectura si está disponible
+				let lastLocationCfi: string | null = null;
+				if (browser && currentBook) {
+					lastLocationCfi = localStorage.getItem(`${currentBook.id}-lastLocationCfi`);
+				}
+				
 				// Mostrar el contenido del libro. Esto puede tomar un momento.
-				await tempRendition.display();
+				await tempRendition.display(lastLocationCfi || undefined);
 				epubInstance = tempEpubInstance;
 				rendition = tempRendition;
 
@@ -173,41 +167,51 @@
 					// Actualizar el título del capítulo si está disponible
 					currentChapterTitle = navItem?.label?.trim() || '';
 				});
-				
-								// Add click listener for TTS
+
+				// --- Lógica de Clic para Hablar (TTS) - El Método Correcto y Definitivo ---
+				// Mis disculpas por los intentos anteriores. Este es el método correcto, usando el
+				// evento 'click' que la propia librería epubjs proporciona. Es la forma más simple y robusta.
 				tempRendition.on('click', async (event: any) => {
-					if (epubInstance && rendition && event.location && event.location.start && event.location.start.cfi) {
-						const cfi = event.location.start.cfi;
+					// LOG DE DEPURACIÓN INMEDIATO: Para confirmar que el evento se dispara.
+					console.log('EPUBJS CLICK EVENT RECEIVED:', event);
+
+					// El evento de epubjs nos da el CFI directamente. No necesitamos calcularlo.
+					let cfi = event.cfi;
+
+					const clickedElement = event.target as HTMLElement;
+
+					// Fallback: Si el evento no proporciona un CFI, intentamos generarlo desde el elemento clicado.
+					// Esto aumenta la robustez si el clic ocurre en un elemento que epubjs no mapea directamente.
+					if (!cfi && clickedElement && rendition) {
 						try {
-							// Get the DOM range corresponding to the CFI
-							const range = await epubInstance.getRange(cfi);
-							let textToSpeak = range.toString().trim();
-
-							// Attempt to expand the text to the containing block element (e.g., paragraph)
-							if (range.startContainer) {
-								let parentElement: HTMLElement | null = null;
-								if (range.startContainer.nodeType === Node.ELEMENT_NODE) {
-									parentElement = range.startContainer as HTMLElement;
-								} else if (range.startContainer.parentNode && range.startContainer.parentNode.nodeType === Node.ELEMENT_NODE) {
-									parentElement = range.startContainer.parentNode as HTMLElement;
-								}
-
-								while (parentElement && parentElement.tagName !== 'BODY' && !['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI'].includes(parentElement.tagName)) {
-									parentElement = parentElement.parentNode as HTMLElement;
-								}
-								if (parentElement && parentElement.tagName !== 'BODY') {
-									textToSpeak = parentElement.innerText.trim();
-								}
+							const view = rendition.manager.current();
+							if (view && view.contents) {
+								cfi = (view.contents as any).cfiFromNode(clickedElement);
+								console.log('CFI generado manualmente desde el nodo:', cfi);
 							}
-							speakText(textToSpeak);
 						} catch (e) {
-							console.error("Error getting range or text from CFI:", e);
+							console.warn('No se pudo generar un CFI desde el elemento clicado:', e);
 						}
+					}
+
+					// Si clickedElement es válido, procedemos a leer. CFI puede ser null, lo cual readTextSegment maneja.
+					if (clickedElement) {
+						isReadingContinuously = true; // Un clic inicia la lectura continua
+						readTextSegment(clickedElement, cfi); // Pasar CFI (puede ser null)
+					} else {
+						console.warn('El elemento clicado no fue válido. No se puede procesar el clic.');
 					}
 				});
 
 				// Manejar cambios de ubicación (evento correcto: 'relocated')
 				tempRendition.on('relocated', (location: any) => {
+					if (isReadingContinuously) {
+						// Darle un momento a Svelte/DOM para actualizarse después del cambio de página
+						tick().then(() => {
+							startReadingFromCurrentView();
+						});
+					}
+
 					if (epubInstance?.locations) {
 						// Forzamos el tipo a 'any' para acceder a 'start.cfi' y confiamos en las verificaciones de nulidad.
 						const startLocationObject = (location as any)?.start;
@@ -216,14 +220,18 @@
 						}
 
 						const cfi = startLocationObject.cfi;
+
+						// Guardamos la última posición de lectura para este libro
+						if (browser && currentBook) {
+							localStorage.setItem(`${currentBook.id}-lastLocationCfi`, cfi);
+						}
+
 						currentPercentage = epubInstance.locations.percentageFromCfi(cfi);
 						// Actualizar números de página si las ubicaciones están cargadas
 						if (locationsTotal > 0 && epubInstance.locations) { // Asegurarse de que locations exista
-							const loc = epubInstance.locations.load(cfi);
-							// epubjs locations.load() puede devolver un objeto con page o un string CFI.
-							// Necesitamos manejar ambos casos o asegurarnos del tipo.
-							// Por ahora, asumimos que si es un objeto, tiene 'page'.
-							currentPageInLocations = typeof loc === 'object' && loc && 'page' in loc ? (loc as any).page as number : 0;
+							// Usar locationFromCfi que devuelve un índice (0-based) y es más robusto entre versiones de epubjs
+							const pageIndex = (epubInstance.locations as any).locationFromCfi(cfi);
+							currentPageInLocations = (pageIndex ?? -1) + 1; // Convertir a número de página (1-based), resulta en 0 si es null
 						}
 					} else {
 						// Fallback si locations aún no está listo
@@ -234,14 +242,28 @@
 
 
 				isLoadingLocations = true; 
-				tempEpubInstance.locations.generate(1000) 
-				.then(() => { 
-					locationsTotal = tempEpubInstance!.locations.length(); 
-					isLoadingLocations = false; 
-				}) 
-				.catch((err: unknown) => { 
-					console.error('Error generating locations', err); 
-					isLoadingLocations = false; 
+				// Usar la promesa de .generate() es más limpio que el evento 'locationsGenerated'
+				tempEpubInstance.locations.generate(1000).then(() => {
+					if (!epubInstance?.locations || !rendition) return;
+
+					locationsTotal = epubInstance.locations.length();
+					console.log(`EPUB.js: Locations generated. Total locations: ${locationsTotal}`);
+
+					// Después de que las ubicaciones estén listas, actualiza la página y el porcentaje
+					// basándose en la vista actual.
+					const currentLocation = rendition.currentLocation();
+					const startOfCurrentLocation = (currentLocation as any)?.start;
+
+					if (startOfCurrentLocation && typeof startOfCurrentLocation.cfi === 'string') {
+						const cfi = startOfCurrentLocation.cfi;
+						currentPercentage = epubInstance.locations.percentageFromCfi(cfi);
+						const pageIndex = (epubInstance.locations as any).locationFromCfi(cfi);
+						currentPageInLocations = (pageIndex ?? -1) + 1;
+					}
+				}).catch((err: unknown) => {
+					console.error('Error generating locations', err);
+				}).finally(() => {
+					isLoadingLocations = false;
 				});
 
 
@@ -263,41 +285,7 @@
 
 				applyEpubTheme($themeStore); // Aplicar tema inicial
 
-				// Escuchar la finalización de la generación de ubicaciones
-				if (epubInstance) { // El listener va en la instancia del libro
-					epubInstance.on('locationsGenerated', (locationsGenerated: any) => { // Renombrado parámetro para evitar confusión con variable global
-						try {
-							console.log('EPUB.js: Event "locationsGenerated" fired. Locations data:', locationsGenerated);
-							if (epubInstance?.locations) { // Doble verificación por si acaso
-								locationsTotal = epubInstance.locations.length();
-								isLoadingLocations = false;
-								console.log(`EPUB.js: isLoadingLocations set to false. Total locations: ${locationsTotal}`);
-								if (rendition) { // Asegurarse que rendition exista
-									// Actualizar porcentaje y página inicial después de que las ubicaciones estén listas
-									// Esto es importante si el libro ya estaba abierto en una posición específica
-									const currentLocationObject = rendition.currentLocation();
-
-									// El objeto Location de epubjs tiene una propiedad 'start' que contiene el CFI.
-									// Forzamos 'any' para el acceso directo y confiamos en las verificaciones.
-									const startOfCurrentLocation = (currentLocationObject as any)?.start;
-									if (!startOfCurrentLocation || typeof startOfCurrentLocation.cfi !== 'string') {
-										console.warn('EPUB.js: Could not get CFI from current location on locationsGenerated.');
-										return;
-									}
-
-									const cfi = startOfCurrentLocation.cfi;
-									currentPercentage = epubInstance.locations.percentageFromCfi(cfi);
-									const loc = epubInstance.locations.load(cfi);
-									currentPageInLocations = typeof loc === 'object' && loc && 'page' in loc ? loc.page as number : 0;
-								}
-							}
-						} catch (err) {
-							console.error('EPUB.js: Error inside "locationsGenerated" callback:', err);
-							isLoadingLocations = false; // Asegurarse de que no se quede cargando indefinidamente
-						} // Fin del if (epubInstance?.locations)
-					});
-				}
-
+				
 				// isLoading ya se estableció a false antes para permitir el renderizado del viewerElement.
 
 			} catch (error) {
@@ -350,32 +338,195 @@
 	$: if (browser && ttsLang) localStorage.setItem('tts-lang', ttsLang);
 	$: if (browser && piperVoiceKey) localStorage.setItem('piper-voice-key', piperVoiceKey);
 
-	async function speakText(textToSpeak: string) {
-		if (!textToSpeak.trim()) {
-			console.warn("No text to speak.");
+	// Función auxiliar para eliminar el resaltado actual
+	function removeHighlight() {
+		if (rendition && currentHighlightedCfi) {
+			rendition.annotations.remove(currentHighlightedCfi, 'highlight');
+			currentHighlightedCfi = null;
+		}
+	}
+
+	function togglePlayback() {
+		if (!currentAudio) {
+			// Si no hay audio, y el usuario presiona Play, iniciar lectura continua desde la vista actual
+			if (!isAudioPlaying) {
+				isReadingContinuously = true;
+				startReadingFromCurrentView();
+			}
 			return;
 		}
 
-		if (currentAudio) {
+		if (isAudioPlaying) {
 			currentAudio.pause();
-			currentAudio.currentTime = 0;
+			isReadingContinuously = false; // Pausar detiene la lectura continua
+		} else {
+			currentAudio.play();
+			isReadingContinuously = true; // Reanudar la lectura continua
+		}
+	}
+
+	// Función para encontrar y leer el primer elemento legible en la vista actual
+	async function startReadingFromCurrentView() {
+		if (!rendition || !epubInstance || !isReadingContinuously) {
+			return;
+		}
+
+		const location = rendition.currentLocation();
+
+		if (!location || !location.start?.cfi) {
+			console.warn('No se encontró la ubicación actual para iniciar la lectura.');
+			isReadingContinuously = false;
+			return;
 		}
 
 		try {
-			const response = await fetch(`${BACKEND_URL}/text-to-audio`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ text: textToSpeak, lang: ttsLang, tts_engine: ttsEngine, piper_voice: piperVoiceKey })
-			});
-
-			if (!response.ok) {
-				const errorData = await response.json();
-				throw new Error(`Backend error: ${errorData.detail || response.statusText}`);
+			// Obtener el elemento al principio de la vista actual usando el CFI
+			const range = await epubInstance.getRange(location.start.cfi);
+			if (!range) {
+				console.warn('No se pudo obtener el rango desde el CFI inicial. Avanzando página.');
+				rendition.next();
+				return;
 			}
-			const data = await response.json();
-			const audioUrl = data.audio_file_urls[0]; // Assuming one combined audio file
-			if (audioUrl) { currentAudio = new Audio(audioUrl); currentAudio.play(); } else { console.warn("No audio URL received from backend."); }
-		} catch (error) { console.error("Error speaking text:", error); }
+
+			const startNode = range.startContainer;
+			const element = (startNode.nodeType === Node.TEXT_NODE ? startNode.parentElement : startNode) as HTMLElement;
+
+			// Encontrar el elemento de bloque legible más cercano
+			const readableElement = element.closest('p, li, h1, h2, h3, h4, h5, h6, div') as HTMLElement;
+
+			if (readableElement && readableElement.textContent?.trim()) {
+				const view = rendition.manager.current();
+				const cfi = view ? (view.contents as any).cfiFromNode(readableElement) : null;
+				readTextSegment(readableElement, cfi);
+			} else {
+				// Si el primer elemento visible no es legible, avanzar a la siguiente página
+				console.log('Primer elemento visible no es legible, avanzando...');
+				rendition.next();
+			}
+		} catch (e) {
+			console.error('Error al iniciar la lectura desde la vista actual:', e);
+			isReadingContinuously = false;
+		}
+	}
+
+	// Nueva función para encontrar y leer el siguiente segmento de texto
+	function findAndReadNextSegment(currentElement: HTMLElement) {
+		if (!rendition || !isReadingContinuously) return;
+
+		const view = rendition.manager.current();
+		if (!view || !view.document) return;
+
+		// Obtener todos los elementos legibles en el capítulo actual y filtrar los vacíos
+		const allReadableElements = Array.from(
+			view.document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, div')
+		).filter((el) => el.textContent?.trim());
+
+		const currentIndex = allReadableElements.findIndex((el) => el.isSameNode(currentElement));
+
+		if (currentIndex > -1 && currentIndex + 1 < allReadableElements.length) {
+			const nextElement = allReadableElements[currentIndex + 1] as HTMLElement;
+			const cfi = (view.contents as any).cfiFromNode(nextElement);
+			readTextSegment(nextElement, cfi);
+		} else {
+			// Si no hay más elementos legibles, ir a la siguiente página
+			console.log('Fin de los elementos legibles en la sección, avanzando página...');
+			rendition.next();
+		}
+	}
+
+	// Renombrada de speakText a readTextSegment para reflejar su rol en la lectura de un segmento
+	async function readTextSegment(element: HTMLElement, cfi: string | null) { // CFI es ahora opcional
+		const textToSpeak = element.textContent?.trim() || '';
+		if (!textToSpeak.trim()) {
+			console.warn("El elemento no tiene texto para leer:", element);
+			if (isReadingContinuously) findAndReadNextSegment(element); // Si está vacío, buscar el siguiente
+			return;
+		}
+
+		// Detener y limpiar completamente la instancia de audio anterior
+		if (currentAudio) {
+			currentAudio.pause();
+			currentAudio.onplaying = null;
+			currentAudio.onpause = null;
+			currentAudio.onended = null;
+			currentAudio.onerror = null;
+			currentAudio.src = '';
+			currentAudio = null;
+		}
+		removeHighlight(); // Asegurarse de que el resaltado anterior se elimine
+		if (rendition && cfi) {
+			// Solo resaltar si el CFI está disponible
+			// Usar el tipo 'highlight' que es estándar en epubjs para el resaltado
+			rendition.annotations.highlight(cfi, {}, (e: any) => {}, 'tts-highlight');
+			currentHighlightedCfi = cfi; // Guardar el CFI para poder eliminar el resaltado después
+		}
+
+		isAudioPlaying = false;
+		isAudioLoading = true;
+
+		try {
+			console.log("Text to Speech: ", textToSpeak);
+
+			const url = new URL(`${BACKEND_URL}/text_to_audio`);
+			url.searchParams.append('tts_provider', ttsEngine);
+			url.searchParams.append('lang', ttsLang);
+			if (ttsEngine === 'piper' && piperVoiceKey) {
+				url.searchParams.append('piper_voice_key', piperVoiceKey);
+			}
+			
+			const response = await fetch(url.toString(), {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Accept': 'audio/wav, audio/mpeg' // Indicar que esperamos audio
+				},
+				body: JSON.stringify({ text: textToSpeak })
+			});
+			
+			if (!response.ok) {
+				let errorDetail = response.statusText;
+				try {
+					const errorData = await response.json();
+					errorDetail = errorData.detail || errorDetail;
+				} catch (e) { /* No es un error JSON, usar statusText */ }
+				throw new Error(`Backend error: ${errorDetail}`);
+			}
+			
+			const audioBlob = await response.blob();
+			const audioUrl = URL.createObjectURL(audioBlob);
+			currentAudio = new Audio(audioUrl);
+
+			// Sincronizar el estado de reproducción con los eventos del elemento de audio y manejar la continuidad
+			currentAudio.onplaying = () => { isAudioPlaying = true; };
+			currentAudio.onpause = () => {
+				isAudioPlaying = false;
+				// No limpiar el resaltado aquí para que el usuario sepa dónde se detuvo
+			};
+			currentAudio.onended = () => {
+				isAudioPlaying = false;
+				if (isReadingContinuously) {
+					findAndReadNextSegment(element); // Buscar el siguiente segmento en lugar de solo cambiar de página
+				} else {
+					currentAudio = null; // Limpiar audio si no es continuo
+					removeHighlight();
+				}
+			};
+			currentAudio.onerror = (e) => {
+				console.error("Error de reproducción de audio:", e);
+				isAudioPlaying = false; isAudioLoading = false; currentAudio = null;
+				isReadingContinuously = false; // Detener lectura continua en caso de error
+				removeHighlight();
+			};
+
+			await currentAudio.play();
+		} catch (error) {
+			console.error("Error speaking text:", error);
+			currentAudio = null; // Asegurar que se limpie en caso de error
+			isReadingContinuously = false;
+			removeHighlight();
+		} finally {
+			isAudioLoading = false; // Ocultar el indicador de carga
+		}
 	}
 
 
@@ -408,11 +559,10 @@
 			}
 			// Actualizar texto del tooltip
 			if (epubInstance.locations) {
-				const loc = epubInstance.locations.load(cfi);
-				// Verificar si loc es un objeto y tiene la propiedad 'page' antes de acceder a ella
-				const pageNum = typeof loc === 'object' && loc && 'page' in loc ? (loc as any).page as number : 0;
+				const pageIndex = (epubInstance.locations as any).locationFromCfi(cfi);
+				const pageNum = (pageIndex ?? -1) + 1;
 				const percentageDisplay = Math.round(percentage * 100);
-				tooltipText = `${percentageDisplay}% (${pageNum} / ${locationsTotal})`;
+				tooltipText = `${percentageDisplay}% (${pageNum > 0 ? pageNum : '...'} / ${locationsTotal})`;
 			} else if (percentage !== currentPercentage) { // Mostrar solo porcentaje si locations no está listo y el porcentaje cambia
 				const percentageDisplay = Math.round(percentage * 100);
 				tooltipText = `${percentageDisplay}%`; // No mostrar pageNum/locationsTotal if locations not ready
@@ -477,10 +627,10 @@
 			rendition.display(cfi);
 			// Actualizar tooltip si es necesario (opcional para teclado)
 			if (epubInstance.locations) {
-				const loc = epubInstance.locations.load(cfi);
-				const pageNum = typeof loc === 'object' && loc && 'page' in loc ? (loc as any).page as number : 0;
+				const pageIndex = (epubInstance.locations as any).locationFromCfi(cfi);
+				const pageNum = (pageIndex ?? -1) + 1;
 				const percentageDisplay = Math.round(newPercentage * 100);
-				tooltipText = `${percentageDisplay}% (${pageNum} / ${locationsTotal})`;
+				tooltipText = `${percentageDisplay}% (${pageNum > 0 ? pageNum : '...'} / ${locationsTotal})`;
 			}
 		}
 	}
@@ -641,6 +791,28 @@
 				{:else}
 					<p class="text-center text-sm text-text-muted">{$_('reader.progressNotAvailable', { default: 'Progress not available' })}</p>
 				{/if}
+
+				<!-- Controles de Audio -->
+				<div class="absolute left-4 bottom-3">
+					{#if isAudioLoading}
+						<button class="p-2 rounded-full bg-surface-hover text-text-muted cursor-not-allowed" disabled>
+							<Loader2 class="animate-spin" size={24} />
+						</button>
+					{:else}
+						<button 
+							on:click={togglePlayback} 
+							class="p-2 rounded-full bg-surface-hover text-text-base hover:bg-primary hover:text-on-primary transition-colors"
+							aria-label={isAudioPlaying ? $_('reader.tts.pause', { default: 'Pause audio' }) : $_('reader.tts.play', { default: 'Play audio' })}
+						>
+							{#if isAudioPlaying}
+								<Pause size={24} />
+							{:else}
+								<Play size={24} />
+							{/if}
+						</button>
+					{/if}
+				</div>
+
 			</div>
 			{:else} <!-- Fallback si rendition no está lista pero no hay error ni carga (después de que el visor se haya intentado renderizar) -->
 				<div class="absolute inset-0 flex flex-col items-center justify-center p-4 text-center">
@@ -686,5 +858,11 @@
 	}
 	.shadow-up {
 		box-shadow: 0 -4px 6px -1px rgb(0 0 0 / 0.1), 0 -2px 4px -2px rgb(0 0 0 / 0.1);
+	}
+
+	/* Estilos globales para el resaltado de TTS */
+	:global(.tts-highlight) {
+		background-color: yellow !important; /* O el color que prefieras */
+		opacity: 0.5 !important;
 	}
 </style>

@@ -15,6 +15,7 @@
 
     const piperVoices =  [
         { value: 'es_MX-claude-high', label: 'Spanish (Mexico) - Claude High' },
+        { value: 'es_MX-ald-medium', label: 'Spanish (Mexico) - Ald Medium' },
         { value: 'es_ES-mls_9972-low', label: 'Spanish (Spain) - MLS Low' }
     ]
 

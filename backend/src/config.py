@@ -27,6 +27,10 @@ _PIPER_VOICES_CONFIG_RAW = {
         "model_path_relative": Path("es_MX") / "es_MX-claude-high.onnx",
         "description": "Voz Claude en Español (México) - Alta calidad"
     },
+    "es_MX-ald-medium": {
+        "model_path_relative": Path("es_MX") / "es_MX-ald-medium.onnx",
+        "description": "Voz Claude en Español (México) - Alta calidad"
+    },
     "es_ES-mls_9972-low": {
         "model_path_relative": Path("es_ES-mls_9972-low") / "es_ES-mls_9972-low.onnx",
         "description": "Voz MLS en Español (España) - Baja calidad"

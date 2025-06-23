@@ -1,11 +1,13 @@
 import shutil
-from typing import List, Optional
+from typing import List, Optional, Text
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pathlib import Path
 import logging
-import uuid # Para generar nombres de directorio únicos
+import uuid
+
+from pydantic import BaseModel, Field # Para generar nombres de directorio únicos
 
 from src.services.tts_chunk_service import generate_audio_with_chunking
 
@@ -33,6 +35,11 @@ SUPPORTED_LANGUAGES: List[str] = ["es", "en"]
 
 # Asegurarse de que el directorio de salidas principal exista
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# --- Modelos de Pydantic ---
+class TextToAudioRequest(BaseModel):
+    text: str = Field(..., description="El texto a convertir en audio.", min_length=1)
 
 # --- Funciones Auxiliares ---
 def save_upload_file_to_temp_sync(upload_file: UploadFile, temp_dir: Path) -> Path:
@@ -256,7 +263,104 @@ async def epub_to_audio(
         cleanup_temp_dir_audio()
         logging.error(f"Error general antes del procesamiento principal en epub_to_audio: {e}")
         raise HTTPException(status_code=500, detail=f"Ocurrió un error inesperado al configurar: {e}")
-        
+
+@app.post(
+    "/text_to_audio",
+    summary="Convierte texto a un libro de audio",
+    tags=["Text to Audio"]
+)
+async def text_to_audio(
+    background_tasks: BackgroundTasks,
+    text_input: TextToAudioRequest,
+    tts_provider: str = Query("piper", enum=TTS_PROVIDERS, description="Motor de texto a utilizar"),
+    lang: str = Query("es", enum=SUPPORTED_LANGUAGES, description="Idioma para TTS"),
+    piper_voice_key: Optional[str] = Query(None, description=f"Clave de voz de Piper (requerido si tts_provider es 'piper'). Disponibles: {list(PIPER_VOICES_CONFIG.keys())}")
+):
+    """_summary_
+
+    Args:
+        background_tasks (BackgroundTasks): BackgroundTasks
+        text_input (str, optional): Text to Process. Defaults to TextToAudioRequest.
+        tts_provider (str, optional): TTS Engine to use. Defaults to Query("piper", enum=TTS_PROVIDERS, description="Motor de texto a utilizar").
+        lang (str, optional): TTS Language. Defaults to Query("es", enum=SUPPORTED_LANGUAGES, description="Idioma para TTS").
+        piper_voice_key (_type_, optional): TTS Voice Key. Defaults to Query(None, description=f"Clave de voz de Piper (requerido si tts_provider es 'piper'). Disponibles: {list(PIPER_VOICES_CONFIG.keys())}").
+    """
+
+    validate_tts_parameters(tts_provider=tts_provider, piper_voice_key=piper_voice_key, available_piper_voices_config=PIPER_VOICES_CONFIG)
+
+    text_content = text_input.text
+    if not text_content or not text_content.strip():
+        raise HTTPException(status_code=400, detail="No se proporcionó texto para convertir.")
+
+    # Crear un Subdirectorio dentro de OUTPUTS_DIR para esta solicitud
+    request_specific_dir = str(uuid.uuid4())
+    temp_dir = OUTPUTS_DIR / request_specific_dir
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+
+    def cleanup_temp_dir_audio():
+        try:
+            shutil.rmtree(temp_dir)
+            logging.info(f"Directorio temporal de audio {temp_dir} y su contenido eliminados.")
+        except Exception as e:
+            logging.error(f"Error al eliminar al irectorio temporal de audio {temp_dir}: {e}")  
+
+    try:
+        logging.info(f"Creando motor TTS: {tts_provider}")
+        tts_engine: TextToSpeechInterface = create_engine(
+            engine_type=tts_provider,
+            lang=lang,
+            piper_voice_key=piper_voice_key,
+            piper_executable_path=PIPER_EXECUTABLE_PATH,
+            piper_voices_config=PIPER_VOICES_CONFIG
+        )
+
+        base_audio_name = f"audio_{uuid.uuid4().hex[:12]}"
+        output_extension = "mp3" if tts_provider == "gtts" else "wav"
+        final_output_audio_filename = f"{base_audio_name}.{output_extension}"
+        final_output_audio_path = temp_dir / final_output_audio_filename
+        media_type = MP3_MEDIA_TYPE if tts_provider == "gtts" else WAV_MEDIA_TYPE
+
+        inter_chunk_delay = 1.0 if tts_provider == "gtts" else 0.0
+        logging.info(f"Preparando para generar audio en: {final_output_audio_path}")
+
+        try:
+            generate_audio_with_chunking(
+                tts_engine=tts_engine,
+                text_content=text_content,
+                temp_dir=temp_dir,
+                base_filename=base_audio_name,
+                final_outputh_path=final_output_audio_path,
+                output_format=output_extension,
+                inter_chunk_delay=inter_chunk_delay
+            )
+        except Exception as e_chunk:
+            logging.error(f"Error durante la generación de audio con fragmentación: {e_chunk}")
+            raise HTTPException(status_code=500, detail=f"Error al procesar audio: {e_chunk}")
+
+        if not final_output_audio_path.exists() or final_output_audio_path.stat().st_size == 0:
+            logging.error(f"El archivo de audio no fue generado o está vacío: {final_output_audio_path}")
+            raise HTTPException(status_code=500, detail="Error al generar el archivo de audio: el archivo no se creó o está vacío.")
+
+        logging.info(f"Audio generado: {final_output_audio_path}")
+        # background_tasks.add_task(cleanup_temp_dir_audio) # Comentado para que los archivos persistan
+        return FileResponse(str(final_output_audio_path), media_type=media_type, filename=final_output_audio_filename)
+    
+    except ValueError as e: # Errores de create_engine
+        logging.error(f"Error al crear el motor TTS: {e}")
+        cleanup_temp_dir_audio()
+        raise HTTPException(status_code=400, detail=f"Error de configuración del motor TTS: {e}")
+    except FileNotFoundError as e: # Errores de PiperEngine si no encuentra ejecutable/modelo
+        logging.error(f"Error de archivo no encontrado (TTS Engine): {e}")
+        cleanup_temp_dir_audio()
+        raise HTTPException(status_code=500, detail=f"Error de configuración del servidor TTS: {e}")
+    except Exception as e:
+        logging.error(f"Error inesperado durante la conversión de Texto a Audio: {e}", exc_info=True)
+        cleanup_temp_dir_audio()
+        raise HTTPException(status_code=500, detail=f"Ocurrió un error inesperado: {e}")
+
+
+
 if __name__ == "__main__":
     # Este bloque permite ejecutar la aplicación con:
     # 1. `python -m src.main` desde el directorio `backend/`
