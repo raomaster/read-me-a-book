@@ -36,6 +36,9 @@ export default {
       normal: "Normal",
       large: "Large",
       extraLarge: "Extra Large"
-    }
+    },
+    ttsEngineLabel: "TTS Engine",
+    ttsLanguageLabel: "TTS Language",
+    piperVoiceLabel: "Piper Voice",
   }
 };

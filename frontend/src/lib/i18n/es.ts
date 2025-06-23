@@ -35,7 +35,10 @@ export default {
       small: "Pequeño",
       normal: "Normal",
       large: "Grande",
-      extraLarge: "Muy Grande"
-    }
+            extraLarge: "Muy Grande",
+    },
+    ttsEngineLabel: "Motor TTS",
+    ttsLanguageLabel: "Idioma TTS",
+    piperVoiceLabel: "Voz de Piper",
   }
 };

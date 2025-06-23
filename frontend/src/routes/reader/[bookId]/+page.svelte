@@ -14,6 +14,29 @@
 	import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
 	import { clickOutside } from '$lib/actions/clickOutside.action';
 	import FontSizeSwitcher from '$lib/components/FontSizeSwitcher.svelte';
+	import TtsConfigurator from '$lib/components/TTSConfigurator.svelte';
+
+	// --- HACK PARA EL PROBLEMA DE SANDBOX EN EPUB.JS 0.3.93 ---
+	// La versión 0.3.93 de epub.js hardcodea `sandbox="allow-same-origin"` en la creación de su iframe interno.
+	// Este hack intenta modificar el atributo sandbox del iframe *antes* de que se cargue el contenido.
+	// Es un parche muy específico y frágil para esta versión de la librería.
+	// Se coloca aquí para asegurar que se ejecute lo antes posible, antes de cualquier instanciación de ePub.
+	if (typeof window !== 'undefined' && (ePub as any).Rendition && (ePub as any).Rendition.View && (ePub as any).Rendition.View.Iframe && !(ePub as any).Rendition.View.Iframe.__patched__) {
+		console.log("EPUB.js Hack: Applying sandbox patch to IframeView.prototype.load (global scope)");
+		const originalIframeViewLoad = (ePub as any).Rendition.View.Iframe.prototype.load;
+		(ePub as any).Rendition.View.Iframe.prototype.load = function(contents: string) {
+			if (this.iframe) {
+				this.iframe.setAttribute("sandbox", "allow-same-origin allow-scripts allow-popups allow-forms allow-pointer-lock allow-top-navigation-by-user-activation");
+				console.log("EPUB.js Hack: Iframe sandbox attribute set during load:", this.iframe.getAttribute("sandbox"));
+			} else {
+				console.warn("EPUB.js Hack: Iframe not found when patching load method. This might indicate a deeper issue.");
+			}
+			const result = originalIframeViewLoad.apply(this, [contents]);
+			(ePub as any).Rendition.View.Iframe.__patched__ = true; // Marca como parcheado
+			return result;
+		};
+	}
+	// --- FIN DEL HACK ---
 
 	// --- Variables de estado del componente ---
 	let currentBook: Book | undefined; // Almacenará el objeto del libro que se está leyendo
@@ -30,6 +53,15 @@
 	let locationsTotal = 0; // Número total de "páginas" según las ubicaciones de epubjs
 	let currentPageInLocations = 0; // Número de página actual (basado en 1)
 	let isLoadingLocations = false; // Indicador para la generación de ubicaciones
+
+	// --------------- TTS Settings----------------
+	const BACKEND_URL = 'http://localhost:8000';
+	let ttsEngine: string = 'piper';
+	let ttsLang: string = 'es';
+	let piperVoiceKey: string = 'es_MX-claude-high';
+	let currentAudio: HTMLAudioElement | null = null;
+
+
 	let isSettingsOpen = false;
 
 	onMount(() => {
@@ -48,6 +80,17 @@
 		currentPercentage = 0;
 		locationsTotal = 0;
 		currentPageInLocations = 0;
+		if (browser) {
+			const storedTtsEngine = localStorage.getItem('tts-engine');
+			const storedTtsLang = localStorage.getItem('tts-lang');
+			const storedPiperVoiceKey = localStorage.getItem('piper-voice-key');
+
+			if (storedTtsEngine) ttsEngine = storedTtsEngine;
+			if (storedTtsLang) ttsLang = storedTtsLang;
+			if (storedPiperVoiceKey) piperVoiceKey = storedPiperVoiceKey;
+		}
+
+
 		isLoadingLocations = false;
 
 		const initEpubViewer = async () => {
@@ -131,6 +174,38 @@
 					currentChapterTitle = navItem?.label?.trim() || '';
 				});
 				
+								// Add click listener for TTS
+				tempRendition.on('click', async (event: any) => {
+					if (epubInstance && rendition && event.location && event.location.start && event.location.start.cfi) {
+						const cfi = event.location.start.cfi;
+						try {
+							// Get the DOM range corresponding to the CFI
+							const range = await epubInstance.getRange(cfi);
+							let textToSpeak = range.toString().trim();
+
+							// Attempt to expand the text to the containing block element (e.g., paragraph)
+							if (range.startContainer) {
+								let parentElement: HTMLElement | null = null;
+								if (range.startContainer.nodeType === Node.ELEMENT_NODE) {
+									parentElement = range.startContainer as HTMLElement;
+								} else if (range.startContainer.parentNode && range.startContainer.parentNode.nodeType === Node.ELEMENT_NODE) {
+									parentElement = range.startContainer.parentNode as HTMLElement;
+								}
+
+								while (parentElement && parentElement.tagName !== 'BODY' && !['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI'].includes(parentElement.tagName)) {
+									parentElement = parentElement.parentNode as HTMLElement;
+								}
+								if (parentElement && parentElement.tagName !== 'BODY') {
+									textToSpeak = parentElement.innerText.trim();
+								}
+							}
+							speakText(textToSpeak);
+						} catch (e) {
+							console.error("Error getting range or text from CFI:", e);
+						}
+					}
+				});
+
 				// Manejar cambios de ubicación (evento correcto: 'relocated')
 				tempRendition.on('relocated', (location: any) => {
 					if (epubInstance?.locations) {
@@ -270,6 +345,40 @@
 		applyEpubTheme($themeStore);
 	}
 
+	// Reaccionar a lo cambios en el TTS Config
+	$: if (browser && ttsEngine) localStorage.setItem('tts-engine', ttsEngine);
+	$: if (browser && ttsLang) localStorage.setItem('tts-lang', ttsLang);
+	$: if (browser && piperVoiceKey) localStorage.setItem('piper-voice-key', piperVoiceKey);
+
+	async function speakText(textToSpeak: string) {
+		if (!textToSpeak.trim()) {
+			console.warn("No text to speak.");
+			return;
+		}
+
+		if (currentAudio) {
+			currentAudio.pause();
+			currentAudio.currentTime = 0;
+		}
+
+		try {
+			const response = await fetch(`${BACKEND_URL}/text-to-audio`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ text: textToSpeak, lang: ttsLang, tts_engine: ttsEngine, piper_voice: piperVoiceKey })
+			});
+
+			if (!response.ok) {
+				const errorData = await response.json();
+				throw new Error(`Backend error: ${errorData.detail || response.statusText}`);
+			}
+			const data = await response.json();
+			const audioUrl = data.audio_file_urls[0]; // Assuming one combined audio file
+			if (audioUrl) { currentAudio = new Audio(audioUrl); currentAudio.play(); } else { console.warn("No audio URL received from backend."); }
+		} catch (error) { console.error("Error speaking text:", error); }
+	}
+
+
 	function toggleSettings() {
 		isSettingsOpen = !isSettingsOpen;
 	}
@@ -402,6 +511,10 @@
 		}
 	}
 
+
+
+
+
 </script>
 
 <svelte:head>
@@ -460,6 +573,7 @@
 						<div class="px-2 py-1"><ThemeSwitcher /></div>
 						<div class="px-2 py-1"><LanguageSwitcher /></div>
 						<div class="px-2 py-1"><FontSizeSwitcher currentRendition={rendition} /></div>
+						<div class="px-2 py-1"><TtsConfigurator bind:ttsEngine={ttsEngine} bind:ttsLang={ttsLang} bind:piperVoiceKey={piperVoiceKey} /></div>
 					</div>
 					{/if}
 				</div>
