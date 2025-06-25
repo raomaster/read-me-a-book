@@ -4,14 +4,16 @@ FROM python:3.12-slim
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         tesseract-ocr tesseract-ocr-spa \
-        poppler-utils ffmpeg calibre curl && \
+        poppler-utils ffmpeg calibre curl tar && \
     rm -rf /var/lib/apt/lists/*
 
 # Download Piper executable
-RUN curl -L -o /usr/local/bin/piper \
-    https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64 \
-    && chmod +x /usr/local/bin/piper
-
+RUN curl -L -o /tmp/piper.tar.gz \
+    https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz \
+    && tar -xzf /tmp/piper.tar.gz -C /usr/local/bin piper \
+    && chmod +x /usr/local/bin/piper \
+    && rm /tmp/piper.tar.gz
+    
 # Environment variables used by the app
 ENV TESSERACT_CMD_PATH=/usr/bin/tesseract \
     CALIBRE_EBOOK_CONVERT_PATH=/usr/bin/ebook-convert \
