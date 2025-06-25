@@ -41,3 +41,12 @@ PIPER_VOICES_CONFIG = {
     key: {"model_path": str(PIPER_MODELS_BASE_DIR / value["model_path_relative"]), "description": value["description"]}
     for key, value in _PIPER_VOICES_CONFIG_RAW.items()
 }
+
+# Configuraciones de Streaming
+STREAMING_CONFIG = {
+    "chunk_size": 500,      # Tamaño máximo de cada chunk de texto
+    "max_retries": 3,       # Máximo número de reintentos por chunk
+    "timeout": 30,          # Timeout en segundos para generar audio
+    "gtts_delay": 1.0,      # Delay entre chunks para gTTS (rate limiting)
+    "piper_delay": 0.0,     # Delay entre chunks para Piper
+}

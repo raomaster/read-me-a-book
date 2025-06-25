@@ -1,20 +1,23 @@
 <script lang="ts">
 	// Importaciones necesarias de Svelte y otras librerías
+	import { page } from '$app/stores';
 	import { onMount, tick } from 'svelte';
-	import { page } from '$app/stores'; // Store de SvelteKit para acceder a información de la página actual (ej. parámetros de URL)
+// Store de SvelteKit para acceder a información de la página actual (ej. parámetros de URL)
 	import { bookStore, type Book } from '$lib/store/book.store'; // Nuestro store de libros y la interfaz Book
-	import ePub, { type Rendition, type Book as EpubBookInstance } from 'epubjs'; // Librería para manejar y renderizar EPUBs
-	import { ArrowLeft, Settings, Play, Pause, Loader2 } from '@lucide/svelte';
+	import ePub, { type Book as EpubBookInstance, type Rendition } from 'epubjs';
+// Librería para manejar y renderizar EPUBs
+	import { ArrowLeft, ArrowRight, Pause, Play, Settings } from '@lucide/svelte';
+// Iconos para la UI.
 	import { goto } from '$app/navigation'; // Para navegar programáticamente a otras rutas
 	import { _ } from 'svelte-i18n'; // Store para las traducciones
 	import { browser } from '$app/environment';
 
-	import themeStore, { type Theme } from '$lib/store/theme.store';
-	import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
-	import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
 	import { clickOutside } from '$lib/actions/clickOutside.action';
 	import FontSizeSwitcher from '$lib/components/FontSizeSwitcher.svelte';
+	import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
+	import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
 	import TtsConfigurator from '$lib/components/TTSConfigurator.svelte';
+	import themeStore, { type Theme } from '$lib/store/theme.store';
 
 	// --- Variables de estado del componente ---
 	let currentBook: Book | undefined; // Almacenará el objeto del libro que se está leyendo
@@ -33,18 +36,194 @@
 	let isLoadingLocations = false; // Indicador para la generación de ubicaciones
 
 	// --------------- TTS Settings----------------
-	const BACKEND_URL = 'http://localhost:8000';
+	const BACKEND_URL = 'http://192.168.1.120:8000';
 	let ttsEngine: string = 'piper';
 	let ttsLang: string = 'es';
 	let piperVoiceKey: string = 'es_MX-claude-high';
 	let currentAudio: HTMLAudioElement | null = null;
-	let isReadingContinuously = false; // Nuevo estado para controlar la lectura continua
-	let currentHighlightedCfi: string | null = null; // Nuevo estado para el CFI del texto resaltado
-	let isAudioPlaying = false; // Para controlar el estado de reproducción
-	let isAudioLoading = false; // Para mostrar un indicador de carga
+let isAudioPlaying = false; // Estado de reproducción
+let lastNavigationTime = 0; // Para evitar navegaciones múltiples consecutivas
+let isUserInteracting = false; // Para detectar interacciones manuales del usuario
+let hasNavigatedThisPage = false; // Para evitar múltiples navegaciones en la misma página
+interface QueueItem {
+    text: string;
+    elements: HTMLElement[];
+    audioUrlPromise?: Promise<string>; // blob URL pre-fetched
+}
+let readingQueue: QueueItem[] = []; // Cola con buffer adelantado
+let currentReadingElements: HTMLElement[] = []; // todos los elementos resaltados actualmente
+let currentReadingElement: HTMLElement | null = null; // legacy var to satisfy old refs
 
 
-	let isSettingsOpen = false;
+	// ---------- Audio prefetch helpers ----------
+async function fetchAudioUrl(text: string): Promise<string> {
+    const url = new URL(`${BACKEND_URL}/text_to_audio`);
+    url.searchParams.append('tts_provider', ttsEngine);
+    url.searchParams.append('lang', ttsLang);
+    if (ttsEngine === 'piper' && piperVoiceKey) {
+        url.searchParams.append('piper_voice_key', piperVoiceKey);
+    }
+    // Debug log: show what text is sent to backend for TTS
+    console.log('TTS request', {
+        text,
+        engine: ttsEngine,
+        lang: ttsLang,
+        piperVoiceKey
+    });
+    const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+    });
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+}
+
+function clearHighlight() {
+    currentReadingElements.forEach(el => (el.style.backgroundColor = ''));
+    currentReadingElements = [];
+}
+
+async function playItem(index: number) {
+    if (index >= readingQueue.length) {
+        isAudioPlaying = false;
+        return;
+    }
+    const item = readingQueue[index];
+
+    // Clear previous highlights first
+    clearHighlight();
+    
+    // Get the elements to highlight
+    currentReadingElements = item.elements;
+    
+    // Apply the highlight
+    currentReadingElements.forEach(el => {
+        if (el && el.style) {
+            el.style.backgroundColor = 'rgba(255,255,0,0.3)';
+        }
+    });
+
+    // Stop any current audio before starting new one
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.src = '';
+        currentAudio = null;
+        isAudioPlaying = false;
+    }
+
+    // ensure audio fetched
+    if (!item.audioUrlPromise) {
+        item.audioUrlPromise = fetchAudioUrl(item.text);
+    }
+    const audioUrl = await item.audioUrlPromise;
+
+    // prefetch next
+    if (index + 1 < readingQueue.length) {
+        const next = readingQueue[index + 1];
+        if (!next.audioUrlPromise) next.audioUrlPromise = fetchAudioUrl(next.text);
+    }
+
+    // --- Fast cross-fade helpers (≈100–150 ms) ---
+    const fadeOut = (audio: HTMLAudioElement, cb: () => void) => {
+        const step = 0.1;           // reduce volume by 10 % each tick
+        const interval = setInterval(() => {
+            if (audio.volume > step) {
+                audio.volume = Math.max(0, audio.volume - step);
+            } else {
+                clearInterval(interval);
+                cb();
+            }
+        }, 10); // run every 10 ms → ~100 ms total
+    };
+
+    // Fast fade-in (~50 ms) to avoid audible "tump" at start.
+    const fadeIn = (audio: HTMLAudioElement) => {
+        audio.volume = 0;
+        const step = 1;            // +20 % each tick
+        const interval = setInterval(() => {
+            if (audio.volume < 1 - step) {
+                audio.volume = Math.min(1, audio.volume + step);
+            } else {
+                audio.volume = 1;
+                clearInterval(interval);
+            }
+        }, 50);                     // 10 ms tick → 40–50 ms total
+    };
+
+    // play
+    currentAudio = new Audio(audioUrl);
+    currentAudio.volume = 0; // start muted to prevent click
+    currentAudio.play();
+    fadeIn(currentAudio);
+    isAudioPlaying = true;
+    
+    // Add event listener for when audio starts playing
+    currentAudio.addEventListener('play', () => {
+        // Only navigate if this is NOT the first item (index > 0) AND audio is actually playing
+        // AND user is not manually interacting
+        if (index > 0 && isAudioPlaying && !isUserInteracting && !hasNavigatedThisPage) {
+            console.log(`Audio started for chunk ${index}, checking navigation...`);
+            setTimeout(() => {
+                if (rendition && currentReadingElements[0] && viewerElement) {
+                    try {
+                        const now = Date.now();
+                        // Increase throttle to 1000ms to prevent rapid navigations
+                        if (now - lastNavigationTime < 500) {
+                            console.log('Skipping navigation - too soon after last navigation');
+                            return;
+                        }
+                        
+                        // Only navigate once per reading session, and only when we're well into the queue
+                        // This prevents multiple navigations and ensures we only navigate when TTS has progressed significantly
+                        if (index >= 3 && !hasNavigatedThisPage) {
+                            console.log(`Navigating based on chunk progress (chunk ${index})`);
+                            lastNavigationTime = now;
+                            hasNavigatedThisPage = true;
+                            
+                            // Always navigate next when reading progresses
+                            console.log('Navigating next');
+                            rendition.next();
+                        }
+                    } catch (e) {
+                        console.warn('Error during navigation:', e);
+                    }
+                }
+            }, 500); // Increased delay to ensure DOM has stabilized and audio has properly started
+        } else {
+            console.log(`Skipping navigation check: index=${index}, isAudioPlaying=${isAudioPlaying}, userInteracting=${isUserInteracting}, hasNavigatedThisPage=${hasNavigatedThisPage}`);
+        }
+    }, { once: true });
+    
+    currentAudio.addEventListener('ended', () => playItem(index + 1), { once: true });
+}
+
+let isSettingsOpen = false;
+
+// Dynamically adjust bottom padding so text is never hidden by footer
+let footerElement: HTMLDivElement | null = null;
+let headerElement: HTMLElement | null = null;
+$: if (viewerElement && footerElement && headerElement) {
+    const footerH = footerElement.offsetHeight;
+    const headerH = headerElement.offsetHeight;
+    // Shrink viewer so it doesn't go under footer
+    viewerElement.style.height = `calc(100% - ${footerH}px - ${headerH}px)`;
+    // Also ensure inner EPUB iframe has bottom margin so last line isn't hidden
+    if (rendition) {
+        const cssPadding = `body { margin-bottom: ${footerH + 16}px !important; margin-top: ${headerH + 16}px !important; }`;
+        rendition.themes.override('body', cssPadding);
+        // Ensure future spine items also get padding
+        if (!(rendition as any).__paddingHookAdded) {
+            rendition.hooks.content.register((contents:any) => {
+                const doc = contents.document;
+                const style = doc.createElement('style');
+                style.textContent = cssPadding;
+                doc.head.appendChild(style);
+            });
+            (rendition as any).__paddingHookAdded = true;
+        }
+    }
+}
 
 	onMount(() => {
 		// Ensure epubInstance and rendition are reset if the component re-initializes
@@ -168,50 +347,58 @@
 					currentChapterTitle = navItem?.label?.trim() || '';
 				});
 
-				// --- Lógica de Clic para Hablar (TTS) - El Método Correcto y Definitivo ---
-				// Mis disculpas por los intentos anteriores. Este es el método correcto, usando el
-				// evento 'click' que la propia librería epubjs proporciona. Es la forma más simple y robusta.
-				tempRendition.on('click', async (event: any) => {
-					// LOG DE DEPURACIÓN INMEDIATO: Para confirmar que el evento se dispara.
+				// --- Lógica de Clic para Hablar (TTS) ---
+				// Simplificada: utilizamos el target del evento para obtener el bloque más cercano (p, li, h1-h6)
+				tempRendition.on('click', (event: MouseEvent) => {
 					console.log('EPUBJS CLICK EVENT RECEIVED:', event);
 
-					// El evento de epubjs nos da el CFI directamente. No necesitamos calcularlo.
-					let cfi = event.cfi;
+					// Mark user interaction
+					isUserInteracting = true;
+					setTimeout(() => { isUserInteracting = false; }, 2000); // Reset after 2 seconds
 
-					const clickedElement = event.target as HTMLElement;
+					// Stop any current audio and clear queue
+					if (currentAudio) {
+						currentAudio.pause();
+						currentAudio.src = '';
+						currentAudio = null;
+						isAudioPlaying = false;
+					}
+					clearHighlight();
+					readingQueue = [];
+					hasNavigatedThisPage = false; // Reset navigation flag for new reading session
 
-					// Fallback: Si el evento no proporciona un CFI, intentamos generarlo desde el elemento clicado.
-					// Esto aumenta la robustez si el clic ocurre en un elemento que epubjs no mapea directamente.
-					if (!cfi && clickedElement && rendition) {
-						try {
-							const view = rendition.manager.current();
-							if (view && view.contents) {
-								cfi = (view.contents as any).cfiFromNode(clickedElement);
-								console.log('CFI generado manualmente desde el nodo:', cfi);
-							}
-						} catch (e) {
-							console.warn('No se pudo generar un CFI desde el elemento clicado:', e);
+					const target = event.target as HTMLElement | null;
+					if (!target) return;
+
+					const blockElement = target.closest('p, li, h1, h2, h3, h4, h5, h6');
+					if (!blockElement) return;
+
+					// --------- CONSTRUCCIÓN DE COLA Y REPRODUCCIÓN ---------
+					const MAX_CHUNK = 800;
+					const splitIntoChunks = (txt: string) => {
+						if (txt.length <= MAX_CHUNK) return [txt];
+						const parts: string[] = [];
+						let remaining = txt.trim();
+						while (remaining.length) {
+							let sliceEnd = remaining.lastIndexOf(' ', MAX_CHUNK);
+							if (sliceEnd < MAX_CHUNK * 0.6) sliceEnd = MAX_CHUNK;
+							parts.push(remaining.slice(0, sliceEnd).trim());
+							remaining = remaining.slice(sliceEnd).trim();
 						}
-					}
-
-					// Si clickedElement es válido, procedemos a leer. CFI puede ser null, lo cual readTextSegment maneja.
-					if (clickedElement) {
-						isReadingContinuously = true; // Un clic inicia la lectura continua
-						readTextSegment(clickedElement, cfi); // Pasar CFI (puede ser null)
-					} else {
-						console.warn('El elemento clicado no fue válido. No se puede procesar el clic.');
-					}
+						return parts;
+					};
+let walker: HTMLElement | null = blockElement as HTMLElement;
+while (walker) {
+    const txt = walker.textContent?.trim() || '';
+    if (txt) splitIntoChunks(txt).forEach(chunk => readingQueue.push({ text: chunk, elements: [walker!] }));
+    walker = walker.nextElementSibling as HTMLElement | null;
+}
+console.log('Queue size', readingQueue.length);
+playItem(0);
 				});
 
 				// Manejar cambios de ubicación (evento correcto: 'relocated')
 				tempRendition.on('relocated', (location: any) => {
-					if (isReadingContinuously) {
-						// Darle un momento a Svelte/DOM para actualizarse después del cambio de página
-						tick().then(() => {
-							startReadingFromCurrentView();
-						});
-					}
-
 					if (epubInstance?.locations) {
 						// Forzamos el tipo a 'any' para acceder a 'start.cfi' y confiamos en las verificaciones de nulidad.
 						const startLocationObject = (location as any)?.start;
@@ -338,134 +525,32 @@
 	$: if (browser && ttsLang) localStorage.setItem('tts-lang', ttsLang);
 	$: if (browser && piperVoiceKey) localStorage.setItem('piper-voice-key', piperVoiceKey);
 
-	// Función auxiliar para eliminar el resaltado actual
-	function removeHighlight() {
-		if (rendition && currentHighlightedCfi) {
-			rendition.annotations.remove(currentHighlightedCfi, 'highlight');
-			currentHighlightedCfi = null;
-		}
-	}
-
-	function togglePlayback() {
-		if (!currentAudio) {
-			// Si no hay audio, y el usuario presiona Play, iniciar lectura continua desde la vista actual
-			if (!isAudioPlaying) {
-				isReadingContinuously = true;
-				startReadingFromCurrentView();
-			}
-			return;
-		}
-
-		if (isAudioPlaying) {
-			currentAudio.pause();
-			isReadingContinuously = false; // Pausar detiene la lectura continua
-		} else {
-			currentAudio.play();
-			isReadingContinuously = true; // Reanudar la lectura continua
-		}
-	}
-
-	// Función para encontrar y leer el primer elemento legible en la vista actual
-	async function startReadingFromCurrentView() {
-		if (!rendition || !epubInstance || !isReadingContinuously) {
-			return;
-		}
-
-		const location = rendition.currentLocation();
-
-		if (!location || !location.start?.cfi) {
-			console.warn('No se encontró la ubicación actual para iniciar la lectura.');
-			isReadingContinuously = false;
-			return;
-		}
-
-		try {
-			// Obtener el elemento al principio de la vista actual usando el CFI
-			const range = await epubInstance.getRange(location.start.cfi);
-			if (!range) {
-				console.warn('No se pudo obtener el rango desde el CFI inicial. Avanzando página.');
-				rendition.next();
-				return;
-			}
-
-			const startNode = range.startContainer;
-			const element = (startNode.nodeType === Node.TEXT_NODE ? startNode.parentElement : startNode) as HTMLElement;
-
-			// Encontrar el elemento de bloque legible más cercano
-			const readableElement = element.closest('p, li, h1, h2, h3, h4, h5, h6, div') as HTMLElement;
-
-			if (readableElement && readableElement.textContent?.trim()) {
-				const view = rendition.manager.current();
-				const cfi = view ? (view.contents as any).cfiFromNode(readableElement) : null;
-				readTextSegment(readableElement, cfi);
-			} else {
-				// Si el primer elemento visible no es legible, avanzar a la siguiente página
-				console.log('Primer elemento visible no es legible, avanzando...');
-				rendition.next();
-			}
-		} catch (e) {
-			console.error('Error al iniciar la lectura desde la vista actual:', e);
-			isReadingContinuously = false;
-		}
-	}
-
-	// Nueva función para encontrar y leer el siguiente segmento de texto
-	function findAndReadNextSegment(currentElement: HTMLElement) {
-		if (!rendition || !isReadingContinuously) return;
-
-		const view = rendition.manager.current();
-		if (!view || !view.document) return;
-
-		// Obtener todos los elementos legibles en el capítulo actual y filtrar los vacíos
-		const allReadableElements = Array.from(
-			view.document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, div')
-		).filter((el) => el.textContent?.trim());
-
-		const currentIndex = allReadableElements.findIndex((el) => el.isSameNode(currentElement));
-
-		if (currentIndex > -1 && currentIndex + 1 < allReadableElements.length) {
-			const nextElement = allReadableElements[currentIndex + 1] as HTMLElement;
-			const cfi = (view.contents as any).cfiFromNode(nextElement);
-			readTextSegment(nextElement, cfi);
-		} else {
-			// Si no hay más elementos legibles, ir a la siguiente página
-			console.log('Fin de los elementos legibles en la sección, avanzando página...');
-			rendition.next();
-		}
-	}
-
-	// Renombrada de speakText a readTextSegment para reflejar su rol en la lectura de un segmento
-	async function readTextSegment(element: HTMLElement, cfi: string | null) { // CFI es ahora opcional
-		const textToSpeak = element.textContent?.trim() || '';
+	async function speakText(textToSpeak: string, element?: HTMLElement) {
 		if (!textToSpeak.trim()) {
-			console.warn("El elemento no tiene texto para leer:", element);
-			if (isReadingContinuously) findAndReadNextSegment(element); // Si está vacío, buscar el siguiente
-			return;
-		}
+        console.warn("No text to speak.");
+        return;
+    }
+    // Resaltar y desplazar
+    if (element) {
+        if (currentReadingElement) {
+            (currentReadingElement as HTMLElement).style.background = '';
+        }
+        currentReadingElement = element;
+        (currentReadingElement as HTMLElement).style.background = 'rgba(255,255,0,0.3)';
+        currentReadingElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
 
-		// Detener y limpiar completamente la instancia de audio anterior
+
+		// Detener la reproducción actual si existe
 		if (currentAudio) {
 			currentAudio.pause();
-			currentAudio.onplaying = null;
-			currentAudio.onpause = null;
-			currentAudio.onended = null;
-			currentAudio.onerror = null;
 			currentAudio.src = '';
 			currentAudio = null;
+			isAudioPlaying = false;
 		}
-		removeHighlight(); // Asegurarse de que el resaltado anterior se elimine
-		if (rendition && cfi) {
-			// Solo resaltar si el CFI está disponible
-			// Usar el tipo 'highlight' que es estándar en epubjs para el resaltado
-			rendition.annotations.highlight(cfi, {}, (e: any) => {}, 'tts-highlight');
-			currentHighlightedCfi = cfi; // Guardar el CFI para poder eliminar el resaltado después
-		}
-
-		isAudioPlaying = false;
-		isAudioLoading = true;
 
 		try {
-			console.log("Text to Speech: ", textToSpeak);
+			console.log("Text to Speech (streaming):", textToSpeak);
 
 			const url = new URL(`${BACKEND_URL}/text_to_audio`);
 			url.searchParams.append('tts_provider', ttsEngine);
@@ -473,59 +558,123 @@
 			if (ttsEngine === 'piper' && piperVoiceKey) {
 				url.searchParams.append('piper_voice_key', piperVoiceKey);
 			}
-			
+
 			const response = await fetch(url.toString(), {
 				method: 'POST',
 				headers: {
-					'Content-Type': 'application/json',
-					'Accept': 'audio/wav, audio/mpeg' // Indicar que esperamos audio
+					'Content-Type': 'application/json'
 				},
 				body: JSON.stringify({ text: textToSpeak })
 			});
-			
+
 			if (!response.ok) {
 				let errorDetail = response.statusText;
 				try {
 					const errorData = await response.json();
 					errorDetail = errorData.detail || errorDetail;
-				} catch (e) { /* No es un error JSON, usar statusText */ }
+				} catch {
+					/* ignore parsing error */
+				}
 				throw new Error(`Backend error: ${errorDetail}`);
 			}
-			
-			const audioBlob = await response.blob();
-			const audioUrl = URL.createObjectURL(audioBlob);
+
+			// Si el navegador no soporta streaming en fetch, recurrimos al blob completo
+			if (!response.body) {
+				const audioBlob = await response.blob();
+				const audioUrl = URL.createObjectURL(audioBlob);
+				currentAudio = new Audio(audioUrl);
+				currentAudio.play();
+				return;
+			}
+
+			const mimeType = response.headers.get('content-type')?.split(';')[0] || (ttsEngine === 'piper' ? 'audio/wav' : 'audio/mpeg');
+
+			// Si el tipo no es soportado por MediaSource o es WAV, usar descarga completa
+			if (!MediaSource.isTypeSupported(mimeType) || mimeType === 'audio/wav') {
+				const audioBlob = await response.blob();
+				const fallbackUrl = URL.createObjectURL(audioBlob);
+				currentAudio = new Audio(fallbackUrl);
+                isAudioPlaying = true;
+				currentAudio.addEventListener('play', () => { isAudioPlaying = true; });
+				currentAudio.addEventListener('pause', () => { isAudioPlaying = false; });
+				currentAudio.addEventListener('ended', () => {
+    isAudioPlaying = false;
+    if (readingQueue.length) {
+        const next = readingQueue.shift();
+        if (next) {
+            readingQueue.unshift(next as QueueItem);
+        playItem(0);
+        }
+    }
+});
+				currentAudio.play();
+				return;
+			}
+
+			const mediaSource = new MediaSource();
+			const audioUrl = URL.createObjectURL(mediaSource);
 			currentAudio = new Audio(audioUrl);
+                isAudioPlaying = true; // actualizar inmediatamente
+				// Sincronizar estado de reproducción
+				currentAudio.addEventListener('play', () => { isAudioPlaying = true; });
+				currentAudio.addEventListener('pause', () => { isAudioPlaying = false; });
+				currentAudio.addEventListener('ended', () => {
+    isAudioPlaying = false;
+    if (readingQueue.length) {
+        const next = readingQueue.shift();
+        if (next) {
+            readingQueue.unshift(next as QueueItem);
+        playItem(0);
+        }
+    }
+});
+			currentAudio.play();
 
-			// Sincronizar el estado de reproducción con los eventos del elemento de audio y manejar la continuidad
-			currentAudio.onplaying = () => { isAudioPlaying = true; };
-			currentAudio.onpause = () => {
-				isAudioPlaying = false;
-				// No limpiar el resaltado aquí para que el usuario sepa dónde se detuvo
-			};
-			currentAudio.onended = () => {
-				isAudioPlaying = false;
-				if (isReadingContinuously) {
-					findAndReadNextSegment(element); // Buscar el siguiente segmento en lugar de solo cambiar de página
-				} else {
-					currentAudio = null; // Limpiar audio si no es continuo
-					removeHighlight();
-				}
-			};
-			currentAudio.onerror = (e) => {
-				console.error("Error de reproducción de audio:", e);
-				isAudioPlaying = false; isAudioLoading = false; currentAudio = null;
-				isReadingContinuously = false; // Detener lectura continua en caso de error
-				removeHighlight();
-			};
+			mediaSource.addEventListener('sourceopen', () => {
+				const sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+				const reader = response.body!.getReader();
+				const queue: Uint8Array[] = [];
 
-			await currentAudio.play();
+				const appendNextChunk = () => {
+					if (queue.length && !sourceBuffer.updating) {
+						sourceBuffer.appendBuffer(queue.shift()!);
+					}
+				};
+
+				const pump = async () => {
+					const { value, done } = await reader.read();
+
+					if (done) {
+						if (!sourceBuffer.updating) {
+							mediaSource.endOfStream();
+						} else {
+							sourceBuffer.addEventListener('updateend', () => mediaSource.endOfStream(), { once: true });
+						}
+						return;
+					}
+
+					if (value) {
+						if (sourceBuffer.updating || queue.length) {
+							queue.push(value);
+						} else {
+							sourceBuffer.appendBuffer(value);
+						}
+					}
+
+					if (!sourceBuffer.updating) {
+						pump();
+					}
+				};
+
+				sourceBuffer.addEventListener('updateend', () => {
+					appendNextChunk();
+				}, false);
+
+				pump();
+			});
+
 		} catch (error) {
-			console.error("Error speaking text:", error);
-			currentAudio = null; // Asegurar que se limpie en caso de error
-			isReadingContinuously = false;
-			removeHighlight();
-		} finally {
-			isAudioLoading = false; // Ocultar el indicador de carga
+			console.error("Error speaking text (streaming):", error);
 		}
 	}
 
@@ -536,6 +685,17 @@
 	function closeSettings() {
 		isSettingsOpen = false;
 	}
+
+	function toggleAudio() {
+        if (!currentAudio) return;
+        if (currentAudio.paused) {
+            currentAudio.play();
+            isAudioPlaying = true;
+        } else {
+            currentAudio.pause();
+            isAudioPlaying = false;
+        }
+    }
 
 	// --- Lógica de la Barra de Progreso ---
 	let progressBarElement: HTMLDivElement | undefined;
@@ -641,9 +801,17 @@
 		const target = event.target as HTMLElement;
 		if (rendition && !isDraggingProgressBar && target.tagName !== 'INPUT' && target.tagName !== 'SELECT' && target.tagName !== 'TEXTAREA' && target.getAttribute('role') !== 'slider') {
 			if (event.key === 'ArrowLeft') {
+				// Mark user interaction
+				isUserInteracting = true;
+				setTimeout(() => { isUserInteracting = false; }, 2000);
+				
 				rendition.prev();
 				event.preventDefault(); // Prevenir scroll de página
 			} else if (event.key === 'ArrowRight') {
+				// Mark user interaction
+				isUserInteracting = true;
+				setTimeout(() => { isUserInteracting = false; }, 2000);
+				
 				rendition.next();
 				event.preventDefault(); // Prevenir scroll de página
 			}
@@ -682,7 +850,7 @@
 
 <div class="flex flex-col h-screen bg-background text-text-base">
 	{#if !isLoading && !errorMessage } <!-- Header unificado: se muestra si no hay carga ni error -->
-		<header class="flex items-center justify-between p-3 border-b border-border shadow-sm bg-surface flex-shrink-0">
+		<header bind:this={headerElement} class="flex items-center justify-between p-3 border-b border-border shadow-sm bg-surface flex-shrink-0">
 			<button
 				on:click={() => goto('/')}
 				class="p-2 rounded-md hover:bg-surface-hover text-text-muted hover:text-text-base"
@@ -741,14 +909,46 @@
 				<button on:click={() => goto('/')} class="mt-4 filled-button">{$_('reader.backToLibrary', { default: 'Back to Library' })}</button>
 			</div>
 		{:else} <!-- Si no está cargando y no hay error, mostrar el visor -->
-			<div bind:this={viewerElement} id="viewer" class="w-full h-full epub-viewer-container pb-16"></div>
+			<div bind:this={viewerElement} id="viewer" class="w-full h-full epub-viewer-container"></div>
+
+                {#if rendition}
+                <!-- Navegación táctil de página -->
+                <button on:click={() => {
+                    isUserInteracting = true;
+                    setTimeout(() => { isUserInteracting = false; }, 2000);
+                    rendition!.prev();
+                }} class="fixed left-2 bottom-28 md:bottom-1/2 md:translate-y-1/2 p-3 rounded-full bg-surface/80 hover:bg-surface shadow z-20" aria-label="Página anterior">
+                    <ArrowLeft size={20} />
+                </button>
+                <button on:click={() => {
+                    isUserInteracting = true;
+                    setTimeout(() => { isUserInteracting = false; }, 2000);
+                    rendition!.next();
+                }} class="fixed right-2 bottom-28 md:bottom-1/2 md:translate-y-1/2 p-3 rounded-full bg-surface/80 hover:bg-surface shadow z-20" aria-label="Página siguiente">
+                    <ArrowRight size={20} />
+                </button>
+                {/if}
 			
 			<!-- Pie de página con Barra de Progreso -->
 			{#if rendition} <!-- La barra de progreso solo se muestra si la rendition está lista -->
-				<div class="fixed bottom-0 left-0 right-0 p-3 bg-surface/90 backdrop-blur-sm border-t border-border shadow-up flex flex-col items-center justify-center">
+				<div bind:this={footerElement} class="fixed bottom-0 left-0 right-0 p-3 bg-surface/90 backdrop-blur-sm border-t border-border shadow-up flex flex-col items-center justify-center gap-2">
 					{#if isLoadingLocations}
 					<p class="text-center text-sm text-text-muted">{$_('reader.loadingProgress', { default: 'Loading progress...' })}</p>
 				{:else if rendition && epubInstance?.locations && locationsTotal > 0}
+						<!-- Controles de audio -->
+						<div class="flex items-center justify-center mb-2">
+							<button
+								on:click|stopPropagation={toggleAudio}
+								class="p-3 rounded-full bg-primary text-white shadow-lg shadow-primary/50 hover:shadow-2xl hover:bg-primary/90 transition focus:outline-none focus:ring-4 focus:ring-primary/60"
+								aria-label={isAudioPlaying ? 'Pause audio' : 'Play audio'}
+							>
+								{#if isAudioPlaying}
+									<Pause size={24} />
+								{:else}
+									<Play size={24} />
+								{/if}
+							</button>
+						</div>
 					<div class="w-full max-w-xl mx-auto relative">
 						<div
 							class="relative h-2.5 bg-border rounded-full cursor-pointer group"
@@ -791,28 +991,6 @@
 				{:else}
 					<p class="text-center text-sm text-text-muted">{$_('reader.progressNotAvailable', { default: 'Progress not available' })}</p>
 				{/if}
-
-				<!-- Controles de Audio -->
-				<div class="absolute left-4 bottom-3">
-					{#if isAudioLoading}
-						<button class="p-2 rounded-full bg-surface-hover text-text-muted cursor-not-allowed" disabled>
-							<Loader2 class="animate-spin" size={24} />
-						</button>
-					{:else}
-						<button 
-							on:click={togglePlayback} 
-							class="p-2 rounded-full bg-surface-hover text-text-base hover:bg-primary hover:text-on-primary transition-colors"
-							aria-label={isAudioPlaying ? $_('reader.tts.pause', { default: 'Pause audio' }) : $_('reader.tts.play', { default: 'Play audio' })}
-						>
-							{#if isAudioPlaying}
-								<Pause size={24} />
-							{:else}
-								<Play size={24} />
-							{/if}
-						</button>
-					{/if}
-				</div>
-
 			</div>
 			{:else} <!-- Fallback si rendition no está lista pero no hay error ni carga (después de que el visor se haya intentado renderizar) -->
 				<div class="absolute inset-0 flex flex-col items-center justify-center p-4 text-center">
@@ -838,10 +1016,6 @@
 		outline-offset: 2px;
 	}
 	/* Eliminar el outline por defecto en elementos con tabindex si se prefiere un estilo de foco personalizado */
-	[tabindex="0"]:focus {
-		outline: none;
-	}
-
 	/* Asegurar que el thumb sea visible cuando la barra de progreso tiene foco */
 	[role="slider"]:focus-visible .absolute.top-1\/2.-translate-y-1\/2,
 	[role="slider"]:hover .absolute.top-1\/2.-translate-y-1\/2 {
@@ -852,17 +1026,8 @@
 		-webkit-user-select: text !important;
 		-moz-user-select: text !important;
 		-ms-user-select: text !important;
-	}
-	#viewer {
-		/* padding-bottom es la clave para el pie de página */
-	}
-	.shadow-up {
+	}	.shadow-up {
 		box-shadow: 0 -4px 6px -1px rgb(0 0 0 / 0.1), 0 -2px 4px -2px rgb(0 0 0 / 0.1);
 	}
 
-	/* Estilos globales para el resaltado de TTS */
-	:global(.tts-highlight) {
-		background-color: yellow !important; /* O el color que prefieras */
-		opacity: 0.5 !important;
-	}
 </style>

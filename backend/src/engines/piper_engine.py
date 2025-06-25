@@ -1,6 +1,12 @@
 import logging
 import os
+import json
 import subprocess
+import time
+import tempfile
+import io
+import numpy as np
+import soundfile as sf
 from ..interfaces import TextToSpeechInterface
 
 
@@ -15,13 +21,36 @@ class PiperEngine(TextToSpeechInterface):
 
         self.model_path = model_path
         self.piper_executable_path = piper_executable_path
+        self.sample_rate = 16000  # Default sample rate, common for many TTS models
+
+        # Leer la configuración del modelo para obtener la frecuencia de muestreo correcta
+        config_path = model_path + ".json"
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                if "audio" in config and "sample_rate" in config["audio"]:
+                    self.sample_rate = config["audio"]["sample_rate"]
+                    logging.info(f"Frecuencia de muestreo para {os.path.basename(model_path)} establecida en {self.sample_rate} Hz desde el archivo de configuración.")
+                else:
+                    logging.warning(f"Archivo de configuración {config_path} encontrado, pero 'sample_rate' no especificado. Usando el valor por defecto de {self.sample_rate} Hz.")
+        else:
+            logging.warning(f"Archivo de configuración {config_path} no encontrado. Usando la frecuencia de muestreo por defecto de {self.sample_rate} Hz. Esto podría causar audio distorsionado.")
+
         logging.info(
             f"PiperEngine Inicializado con modelo: {self.model_path} y ejecutable: {self.piper_executable_path}"
         )
 
+    def _generate_empty_wav(self) -> bytes:
+        """Genera un pequeño archivo WAV silencioso."""
+        logging.debug(f"Generating empty WAV with sample rate: {self.sample_rate} Hz")
+        wav_buffer = io.BytesIO()
+        silent_data = np.zeros(int(self.sample_rate * 0.1), dtype=np.int16) # 0.1 seconds of silence
+        sf.write(wav_buffer, silent_data, samplerate=self.sample_rate, subtype='PCM_16', format='WAV')
+        wav_buffer.seek(0)
+        return wav_buffer.read()
+
     def text_to_speech(self, text: str, output_path: str) -> None:
         # Implementa la conversión de texto a voz usando Piper
-        # Asegurarse de que el directorio de salida exista
         output_dir = os.path.dirname(output_path)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
@@ -33,50 +62,65 @@ class PiperEngine(TextToSpeechInterface):
                 "--model", self.model_path,
                 "--output_file", output_path
             ]
-            logging.debug(f"Ejecutando comando Piper: {' '.join(command)}")
-            logging.debug(f"Texto de entrada para Piper (primeros 100 caracteres): {text[:100]}")
-
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0 # Evitar ventana de consola en Windows
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
-            stdout_bytes, stderr_bytes = process.communicate(input=text.encode('utf-8'))
-
-            stdout_decoded = stdout_bytes.decode('utf-8', errors='ignore').strip()
-            stderr_decoded = stderr_bytes.decode('utf-8', errors='ignore').strip()
+            _, stderr_bytes = process.communicate(input=text.encode('utf-8'))
 
             if process.returncode != 0:
-                error_message = f"Proceso Piper finalizó con código {process.returncode}."
-                if stderr_decoded:
-                    error_message += f" Stderr: {stderr_decoded}"
-                if stdout_decoded: # Registrar stdout también, podría contener información del error
-                    error_message += f" Stdout: {stdout_decoded}"
-                if not stderr_decoded and not stdout_decoded:
-                    error_message += " No se capturó salida de stderr o stdout de Piper."
-                
-                logging.error(f"Error al generar audio con Piper: {error_message}")
-                raise Exception(error_message) # Usar el mensaje de error más detallado
-            else:
-                if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-                    warning_message = f"Proceso Piper finalizó correctamente (código 0) pero el archivo de salida '{output_path}' no se creó o está vacío."
-                    if stdout_decoded: 
-                        warning_message += f" Stdout: {stdout_decoded}"
-                    if stderr_decoded: 
-                        warning_message += f" Stderr (inesperado en éxito): {stderr_decoded}"
-                    logging.warning(warning_message)
-                    # Considerar lanzar una excepción aquí también si un archivo vacío es un fallo crítico.
-                else:
-                    logging.info(f"Audio generado con Piper y guardado en: {output_path}")
-                    if stdout_decoded: 
-                        logging.debug(f"Piper stdout (éxito): {stdout_decoded}")
-                    if stderr_decoded: 
-                        logging.debug(f"Piper stderr (éxito, inesperado): {stderr_decoded}")
-        except FileNotFoundError as fnf_e:
-            logging.error(f"Ejecutable de Piper no encontrado al intentar ejecutar el proceso: {self.piper_executable_path}. Error: {fnf_e}")
-            raise
+                raise Exception(f"Proceso Piper finalizó con código {process.returncode}: {stderr_bytes.decode('utf-8', 'ignore')}")
+            
+            logging.info(f"Audio generado con Piper y guardado en: {output_path}")
+
         except Exception as e:
             logging.error(f"Excepción durante la generación de audio con Piper: {e}")
             raise
+    
+    def text_to_bytes(self, text: str) -> bytes:
+        # --- Implementación Robusta con Archivo Temporal ---
+        tmp_wav_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_wav_file:
+                tmp_wav_path = tmp_wav_file.name
+
+            command = [
+                self.piper_executable_path,
+                "--model", self.model_path,
+                "--output_file", tmp_wav_path
+            ]
+            
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            _, stderr_bytes = process.communicate(input=text.encode('utf-8'))
+
+            if process.returncode != 0:
+                stderr_decoded = stderr_bytes.decode('utf-8', errors='ignore').strip()
+                error_message = f"Piper process exited with non-zero code {process.returncode} for text: '{text[:50]}...'"
+                if stderr_decoded:
+                    error_message += f" Stderr: {stderr_decoded}"
+                logging.error(error_message)
+                return self._generate_empty_wav()
+
+            if not os.path.exists(tmp_wav_path) or os.path.getsize(tmp_wav_path) == 0:
+                logging.error(f"Piper process succeeded (code 0) but output WAV file is missing or empty: {tmp_wav_path}. Text: '{text[:50]}...'")
+                return self._generate_empty_wav()
+
+            with open(tmp_wav_path, "rb") as f:
+                audio_bytes = f.read()
+
+            return audio_bytes
+
+        except Exception as e:
+            logging.error(f"Error al generar audio con Piper a bytes (método de archivo temporal): {e}", exc_info=True)
+            return self._generate_empty_wav()
+        finally:
+            if tmp_wav_path and os.path.exists(tmp_wav_path):
+                os.remove(tmp_wav_path)
