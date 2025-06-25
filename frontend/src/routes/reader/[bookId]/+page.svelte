@@ -36,7 +36,7 @@
 	let isLoadingLocations = false; // Indicador para la generación de ubicaciones
 
 	// --------------- TTS Settings----------------
-	const BACKEND_URL = 'http://192.168.1.120:8000';
+	const BACKEND_URL = 'http://leeme.mooo.com:8000';
 	let ttsEngine: string = 'piper';
 	let ttsLang: string = 'es';
 	let piperVoiceKey: string = 'es_MX-claude-high';

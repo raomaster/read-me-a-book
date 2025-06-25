@@ -1,0 +1,10 @@
+leeme.mooo.com {
+  # cualquier petición a /api/*…
+  handle_path /api/* {
+    reverse_proxy api:8000
+  }
+  # …y el resto de rutas al frontend
+  handle {
+    reverse_proxy front:80
+  }
+}
