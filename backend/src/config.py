@@ -50,3 +50,12 @@ STREAMING_CONFIG = {
     "gtts_delay": 1.0,      # Delay entre chunks para gTTS (rate limiting)
     "piper_delay": 0.0,     # Delay entre chunks para Piper
 }
+
+# Configuraciones para Audio Completo (no streaming)
+COMPLETE_AUDIO_CONFIG = {
+    "chunk_size": 5000,     # Chunks más grandes para mejor calidad y rendimiento
+    "max_retries": 3,       # Máximo número de reintentos por chunk
+    "timeout": 60,          # Timeout más largo para archivos grandes
+    "gtts_delay": 0.5,      # Delay reducido entre chunks para gTTS
+    "piper_delay": 0.0,     # Sin delay para Piper (local)
+}

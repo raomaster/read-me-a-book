@@ -20,7 +20,7 @@ from .services.epub_service import convert_text_to_epub
 from .services.audio_service import extract_text_from_epub
 from .engines.engine_factory import create_engine
 from .interfaces import TextToSpeechInterface # Contrato
-from .config import PIPER_EXECUTABLE_PATH, PIPER_VOICES_CONFIG, OUTPUTS_DIR, STREAMING_CONFIG
+from .config import PIPER_EXECUTABLE_PATH, PIPER_VOICES_CONFIG, OUTPUTS_DIR, STREAMING_CONFIG, COMPLETE_AUDIO_CONFIG
 
 logging.basicConfig(
     level=logging.INFO,
@@ -225,35 +225,44 @@ async def epub_to_audio(
     piper_voice_key: Optional[str] = Query(None, description=f"Clave de voz de Piper (requerido si tts_provider es 'piper'). Disponibles: {list(PIPER_VOICES_CONFIG.keys())}")
 ):
     """
-    Recibe un archivo EPUB, extrae su texto y lo convierte en un archivo de audio MP3
-    usando el proveedor de TTS especificado.
+    Recibe un archivo EPUB, extrae su texto y lo convierte en un archivo de audio
+    usando el proveedor de TTS especificado. El archivo se guarda en outputs/<uuid>/
+    y se devuelve para descarga.
     """
     if file.content_type != EPUB_MEDIA_TYPE:
         raise HTTPException(status_code=400, detail="El archivo debe ser un EPUB.")
 
     validate_tts_parameters(tts_provider, piper_voice_key, PIPER_VOICES_CONFIG)
 
+    # Crear un subdirectorio único dentro de OUTPUTS_DIR para esta solicitud
+    output_uuid = str(uuid.uuid4())
+    output_dir = OUTPUTS_DIR / output_uuid
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def cleanup_temp_dir():
+        try:
+            shutil.rmtree(output_dir)
+            logging.info(f"Directorio temporal {output_dir} y su contenido eliminados.")
+        except Exception as e:
+            logging.error(f"Error al eliminar el directorio temporal {output_dir}: {e}")
+
     try:
-        # Crear un subdirectorio único dentro de OUTPUTS_DIR para esta solicitud
-        request_specific_dir_name = str(uuid.uuid4())
-        temp_dir = OUTPUTS_DIR / request_specific_dir_name
-        temp_dir.mkdir(parents=True, exist_ok=True)
-
-        def cleanup_temp_dir_audio():
-            try:
-                shutil.rmtree(temp_dir)
-                logging.info(f"Directorio temporal de audio {temp_dir} y su contenido eliminados.")
-            except Exception as e:
-                logging.error(f"Error al eliminar el directorio temporal de audio {temp_dir}: {e}")
-
-        input_epub_path = save_upload_file_to_temp_sync(file, temp_dir)
+        # Guardar el EPUB subido en el directorio de salida
+        input_epub_path = save_upload_file_to_temp_sync(file, output_dir)
 
         try:
             logging.info(f"Extrayendo texto del EPUB: {input_epub_path}")
             text_content = extract_text_from_epub(input_epub_path)
 
             if not text_content or not text_content.strip():
+                cleanup_temp_dir()
                 raise HTTPException(status_code=400, detail="No se pudo extraer texto del EPUB o el EPUB está vacío.")
+
+            # Guardar el texto extraído
+            text_file_path = output_dir / "texto_extraido.txt"
+            with open(text_file_path, "w", encoding="utf-8") as f:
+                f.write(text_content)
+            logging.info(f"Texto extraído guardado en: {text_file_path}")
 
             logging.info(f"Creando motor TTS: {tts_provider} para idioma/voz: {lang if tts_provider=='gtts' else piper_voice_key}")
             tts_engine: TextToSpeechInterface = create_engine(
@@ -264,52 +273,75 @@ async def epub_to_audio(
                 piper_voices_config=PIPER_VOICES_CONFIG
             )
 
-            media_type = MP3_MEDIA_TYPE if tts_provider == "gtts" else WAV_MEDIA_TYPE
-
-            # Generator function to stream audio chunks
-            async def audio_stream_generator():
-                chunks = split_text_into_chunks(text_content, STREAMING_CONFIG["chunk_size"])
-                inter_chunk_delay = STREAMING_CONFIG["gtts_delay"] if tts_provider == "gtts" else STREAMING_CONFIG["piper_delay"]
-                
-                for i, chunk in enumerate(chunks):
-                    if not chunk.strip():
-                        continue
-                    
-                    # Reintentos para cada chunk usando configuración
-                    for attempt in range(STREAMING_CONFIG["max_retries"]):
-                        try:
-                            audio_bytes = generate_audio_chunk_simple(tts_engine, chunk, i)
-                            yield audio_bytes
-                            break  # Éxito, continuar al siguiente chunk
-                        except Exception as e:
-                            logging.error(f"Error al generar chunk de audio {i+1} (intento {attempt + 1}): {e}")
-                            if attempt == STREAMING_CONFIG["max_retries"] - 1:
-                                logging.error(f"Falló la generación del chunk {i+1} después de {STREAMING_CONFIG['max_retries']} intentos")
-                                break  # Fallar después de todos los reintentos
-                    
-                    if inter_chunk_delay > 0 and i < len(chunks) - 1:
-                        await asyncio.sleep(inter_chunk_delay)
+            # Generar el audio completo usando chunks más grandes
+            logging.info("Generando audio completo con chunks grandes...")
             
-            # Add cleanup task for the input EPUB file
-            background_tasks.add_task(cleanup_temp_dir_audio)
+            # Dividir el texto en chunks más grandes para mejor calidad
+            chunks = split_text_into_chunks(text_content, COMPLETE_AUDIO_CONFIG["chunk_size"])
+            logging.info(f"Texto dividido en {len(chunks)} chunks de ~{COMPLETE_AUDIO_CONFIG['chunk_size']} caracteres")
+            
+            # Generar audio para cada chunk y concatenar
+            audio_chunks = []
+            for i, chunk in enumerate(chunks):
+                if not chunk.strip():
+                    continue
+                
+                logging.info(f"Procesando chunk {i+1}/{len(chunks)} ({len(chunk)} caracteres)")
+                
+                # Reintentos para cada chunk usando configuración
+                for attempt in range(COMPLETE_AUDIO_CONFIG["max_retries"]):
+                    try:
+                        chunk_audio = generate_audio_chunk_simple(tts_engine, chunk, i)
+                        audio_chunks.append(chunk_audio)
+                        break  # Éxito, continuar al siguiente chunk
+                    except Exception as e:
+                        logging.error(f"Error al generar chunk de audio {i+1} (intento {attempt + 1}): {e}")
+                        if attempt == COMPLETE_AUDIO_CONFIG["max_retries"] - 1:
+                            logging.error(f"Falló la generación del chunk {i+1} después de {COMPLETE_AUDIO_CONFIG['max_retries']} intentos")
+                            raise  # Re-lanzar la excepción después de todos los reintentos
+                
+                # Delay entre chunks si es necesario
+                if COMPLETE_AUDIO_CONFIG["gtts_delay"] > 0 and tts_provider == "gtts" and i < len(chunks) - 1:
+                    await asyncio.sleep(COMPLETE_AUDIO_CONFIG["gtts_delay"])
+            
+            # Concatenar todos los chunks de audio
+            audio_bytes = b''.join(audio_chunks)
+            
+            # Determinar extensión y media type
+            audio_extension = "mp3" if tts_provider == "gtts" else "wav"
+            media_type = MP3_MEDIA_TYPE if tts_provider == "gtts" else WAV_MEDIA_TYPE
+            
+            # Guardar el archivo de audio
+            audio_filename = f"audio.{audio_extension}"
+            audio_file_path = output_dir / audio_filename
+            with open(audio_file_path, "wb") as f:
+                f.write(audio_bytes)
+            
+            logging.info(f"Audio generado exitosamente: {len(audio_bytes)} bytes")
+            logging.info(f"Archivo guardado en: {audio_file_path}")
 
-            # Return StreamingResponse
-            return StreamingResponse(audio_stream_generator(), media_type=media_type)
+            # Devolver el archivo de audio usando FileResponse
+            return FileResponse(
+                path=audio_file_path,
+                media_type=media_type,
+                filename=audio_filename,
+                background=background_tasks.add_task(cleanup_temp_dir)
+            )
 
-        except ValueError as e: # Errores de create_engine
+        except ValueError as e:  # Errores de create_engine
             logging.error(f"Error al crear el motor TTS: {e}")
-            cleanup_temp_dir_audio()
+            cleanup_temp_dir()
             raise HTTPException(status_code=400, detail=f"Error de configuración del motor TTS: {e}")
-        except FileNotFoundError as e: # Errores de PiperEngine si no encuentra ejecutable/modelo
+        except FileNotFoundError as e:  # Errores de PiperEngine si no encuentra ejecutable/modelo
             logging.error(f"Error de archivo no encontrado (TTS Engine): {e}")
-            cleanup_temp_dir_audio()
+            cleanup_temp_dir()
             raise HTTPException(status_code=500, detail=f"Error de configuración del servidor TTS: {e}")
         except Exception as e:
             logging.error(f"Error inesperado durante la conversión EPUB a Audio: {e}")
-            cleanup_temp_dir_audio() # Ensure cleanup even for unexpected errors
+            cleanup_temp_dir()
             raise HTTPException(status_code=500, detail=f"Ocurrió un error inesperado: {e}")
-    except Exception as e: # Captura errores que puedan ocurrir antes del bloque try interno
-        cleanup_temp_dir_audio()
+    except Exception as e:  # Captura errores que puedan ocurrir antes del bloque try interno
+        cleanup_temp_dir()
         logging.error(f"Error general antes del procesamiento principal en epub_to_audio: {e}")
         raise HTTPException(status_code=500, detail=f"Ocurrió un error inesperado al configurar: {e}")
 
