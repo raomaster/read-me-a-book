@@ -1,10 +1,23 @@
 leeme.mooo.com {
-  # cualquier petición a /api/*…
+  # Proxy para el backend (API)
   handle_path /api/* {
-    reverse_proxy api:8000
+    reverse_proxy read-me-a-book-backend:8000
   }
-  # …y el resto de rutas al frontend
+  
+  # Proxy para el frontend (aplicación web)
   handle {
-    reverse_proxy front:80
+    reverse_proxy read-me-a-book-frontend:80
+  }
+  
+  # Configuración de seguridad adicional
+  header {
+    # HSTS (HTTP Strict Transport Security)
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    # Prevenir clickjacking
+    X-Frame-Options "SAMEORIGIN"
+    # Prevenir MIME type sniffing
+    X-Content-Type-Options "nosniff"
+    # Referrer policy
+    Referrer-Policy "strict-origin-when-cross-origin"
   }
 }

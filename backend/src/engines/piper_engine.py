@@ -2,13 +2,11 @@ import logging
 import os
 import json
 import subprocess
-import time
 import tempfile
 import io
 import numpy as np
 import soundfile as sf
 from ..interfaces import TextToSpeechInterface
-
 
 class PiperEngine(TextToSpeechInterface):
     def __init__(self, model_path: str, piper_executable_path: str):
@@ -59,8 +57,12 @@ class PiperEngine(TextToSpeechInterface):
         try:
             command = [
                 self.piper_executable_path,
-                "--model", self.model_path,
-                "--output_file", output_path
+                "-m", self.model_path,
+                "-c", self.model_path + ".json",
+                "-d", output_dir or ".",
+                "-f", os.path.basename(output_path),
+                "--no-split",
+                "-"
             ]
             process = subprocess.Popen(
                 command,
@@ -84,43 +86,86 @@ class PiperEngine(TextToSpeechInterface):
         # --- Implementación Robusta con Archivo Temporal ---
         tmp_wav_path = ""
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_wav_file:
-                tmp_wav_path = tmp_wav_file.name
+            tmp_dir = tempfile.mkdtemp()
+            tmp_wav_path = os.path.join(tmp_dir, "out.wav")
 
             command = [
                 self.piper_executable_path,
-                "--model", self.model_path,
-                "--output_file", tmp_wav_path
+                "-m", self.model_path,
+                "-c", self.model_path + ".json",
+                "-f", "out.wav",
+                "--no-split",
+                "-"
             ]
+            
+            logging.info(f"=== INICIO text_to_bytes ===")
+            logging.info(f"Texto a procesar: '{text}'")
+            logging.info(f"Comando Piper: {' '.join(command)}")
+            logging.info(f"Directorio temporal: {tmp_dir}")
+            logging.info(f"Ruta esperada del archivo: {tmp_wav_path}")
             
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                stderr=subprocess.PIPE,
+                cwd=tmp_dir
             )
-            _, stderr_bytes = process.communicate(input=text.encode('utf-8'))
+            stdout_bytes, stderr_bytes = process.communicate(input=text.encode('utf-8'))
+
+            logging.info(f"Código de salida de Piper: {process.returncode}")
+            if stdout_bytes:
+                logging.info(f"STDOUT de Piper: {stdout_bytes.decode('utf-8', errors='ignore')}")
+            if stderr_bytes:
+                logging.info(f"STDERR de Piper: {stderr_bytes.decode('utf-8', errors='ignore')}")
 
             if process.returncode != 0:
                 stderr_decoded = stderr_bytes.decode('utf-8', errors='ignore').strip()
-                error_message = f"Piper process exited with non-zero code {process.returncode} for text: '{text[:50]}...'"
-                if stderr_decoded:
-                    error_message += f" Stderr: {stderr_decoded}"
-                logging.error(error_message)
+                logging.error(f"Piper process exited with non-zero code {process.returncode}: {stderr_decoded}")
                 return self._generate_empty_wav()
 
-            if not os.path.exists(tmp_wav_path) or os.path.getsize(tmp_wav_path) == 0:
-                logging.error(f"Piper process succeeded (code 0) but output WAV file is missing or empty: {tmp_wav_path}. Text: '{text[:50]}...'")
+            # Buscar el archivo generado en el directorio temporal
+            wav_files = [f for f in os.listdir(tmp_dir) if f.endswith('.wav')]
+            logging.info(f"Archivos WAV encontrados en {tmp_dir}: {wav_files}")
+            logging.info(f"Todos los archivos en {tmp_dir}: {os.listdir(tmp_dir)}")
+            
+            if not wav_files:
+                logging.error(f"Piper process succeeded but no WAV files found in: {tmp_dir}")
                 return self._generate_empty_wav()
 
-            with open(tmp_wav_path, "rb") as f:
+            # Buscar el archivo WAV más grande (por si Piper genera múltiples archivos)
+            largest_wav_file = None
+            largest_size = 0
+            
+            for wav_file in wav_files:
+                wav_path = os.path.join(tmp_dir, wav_file)
+                file_size = os.path.getsize(wav_path)
+                logging.info(f"Archivo WAV encontrado: {wav_path}, tamaño: {file_size} bytes")
+                
+                if file_size > largest_size:
+                    largest_size = file_size
+                    largest_wav_file = wav_path
+            
+            if largest_wav_file is None or largest_size == 0:
+                logging.error(f"Piper process succeeded but no valid WAV files found")
+                return self._generate_empty_wav()
+
+            logging.info(f"Usando archivo WAV más grande: {largest_wav_file} ({largest_size} bytes)")
+
+            with open(largest_wav_file, "rb") as f:
                 audio_bytes = f.read()
 
+            logging.info(f"Audio generado exitosamente: {len(audio_bytes)} bytes")
+            logging.info(f"=== FIN text_to_bytes ===")
             return audio_bytes
 
         except Exception as e:
             logging.error(f"Error al generar audio con Piper a bytes (método de archivo temporal): {e}", exc_info=True)
             return self._generate_empty_wav()
         finally:
-            if tmp_wav_path and os.path.exists(tmp_wav_path):
-                os.remove(tmp_wav_path)
+            try:
+                if 'tmp_dir' in locals():
+                    import shutil
+                    shutil.rmtree(tmp_dir)
+            except OSError:
+                pass

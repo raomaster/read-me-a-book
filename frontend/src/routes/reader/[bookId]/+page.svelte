@@ -28,7 +28,6 @@
 	let errorMessage: string | undefined; // Para almacenar mensajes de error si algo falla
 	let currentChapterTitle = ''; // Título del capítulo actual que se está mostrando
 
-
 	// Variables para la barra de progreso y ubicaciones
 	let currentPercentage = 0; // Porcentaje actual de lectura (0 a 1)
 	let locationsTotal = 0; // Número total de "páginas" según las ubicaciones de epubjs
@@ -36,7 +35,7 @@
 	let isLoadingLocations = false; // Indicador para la generación de ubicaciones
 
 	// --------------- TTS Settings----------------
-	const BACKEND_URL = 'http://leeme.mooo.com:8000';
+	const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://leeme.mooo.com/api';
 	let ttsEngine: string = 'piper';
 	let ttsLang: string = 'es';
 	let piperVoiceKey: string = 'es_MX-claude-high';
@@ -57,7 +56,7 @@ let currentReadingElement: HTMLElement | null = null; // legacy var to satisfy o
 
 	// ---------- Audio prefetch helpers ----------
 async function fetchAudioUrl(text: string): Promise<string> {
-    const url = new URL(`${BACKEND_URL}/text_to_audio`);
+    const url = new URL(`${BACKEND_URL}/text_to_audio`, window.location.origin);
     url.searchParams.append('tts_provider', ttsEngine);
     url.searchParams.append('lang', ttsLang);
     if (ttsEngine === 'piper' && piperVoiceKey) {
@@ -552,7 +551,7 @@ playItem(0);
 		try {
 			console.log("Text to Speech (streaming):", textToSpeak);
 
-			const url = new URL(`${BACKEND_URL}/text_to_audio`);
+			const url = new URL(`${BACKEND_URL}/text_to_audio`, window.location.origin);
 			url.searchParams.append('tts_provider', ttsEngine);
 			url.searchParams.append('lang', ttsLang);
 			if (ttsEngine === 'piper' && piperVoiceKey) {

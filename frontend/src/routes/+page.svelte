@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ThemeSwitcher from "$lib/components/ThemeSwitcher.svelte";
-	import { bookStore } from "$lib/store/book.store";
 	import { clickOutside } from "$lib/actions/clickOutside.action";
 	import LanguageSwitcher from "$lib/components/LanguageSwitcher.svelte";
+	import ThemeSwitcher from "$lib/components/ThemeSwitcher.svelte";
+	import { bookStore } from "$lib/store/book.store";
 	import { _ } from "svelte-i18n";
  
 
@@ -35,19 +35,16 @@
 	<meta name="description" content={$_('metaDescription')} />
 </svelte:head>
 <div class="min-h-screen bg-background p-4 sm:p-6 lg:p-8">
-	<section class="w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-		<!-- Contenedor principal de contenido, consistente con el diseño aprobado -->
-		<div class="bg-surface rounded-2xl shadow-lg p-6">
-			<header class="flex justify-between items-center gap-4 border-b border-border pb-5">
-				<h1 class="text-4xl font-bold text-text-base">{$_("pageTitle")}  ({$bookStore.length})</h1>
-				<div class="flex items-center gap-3">
-					<!-- Botón Principal "Import" (Sin cambios, ya era correcto) -->
-					<label for="file-upload" class="filled-button whitespace-nowrap cursor-pointer">
+	<section class="w-full max-w-7xl mx-auto p-2 sm:p-6 lg:p-8">
+		<div class="bg-surface rounded-xl shadow p-3 sm:p-6">
+			<header class="flex flex-col gap-2 border-b border-border pb-5">
+				<h1 class="text-lg font-bold text-text-base mb-2">{$_("pageTitle")} ({$bookStore.length})</h1>
+				<div class="flex flex-row gap-2 w-full">
+					<label for="file-upload" class="filled-button flex-1 text-center cursor-pointer">
 						<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
 							<path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
 						</svg>
-						{$_("importButton")}  
-						<!-- Icono de libro con símbolo de carga -->
+						{$_("importButton")}
 						<svg fill="currentColor" version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 ml-2" xmlns:xlink="http://www.w3.org/1999/xlink" 
 							viewBox="0 0 87.261 87.261"
 							xml:space="preserve">
@@ -62,9 +59,7 @@
 						</svg>
 					</label>
 					<input id="file-upload" type="file" on:change={handleFileSelect} accept=".epub" class="hidden" />
-
-					<!-- Menú Secundario (Sin cambios, ya era correcto) -->
-					<div class="relative">
+					<div class="relative flex items-center">
 						<button
 							on:click={() => (isMenuOpen = !isMenuOpen)}
 							aria-haspopup="true"
@@ -76,7 +71,6 @@
 								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01" />
 							</svg>
 						</button>
-
 						{#if isMenuOpen}
 							<div
 								class="absolute top-full right-0 mt-2 w-56 bg-surface border border-border rounded-lg shadow-xl z-10 p-2"

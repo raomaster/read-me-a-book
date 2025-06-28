@@ -7,18 +7,26 @@ RUN apt-get update && \
         poppler-utils ffmpeg calibre curl tar && \
     rm -rf /var/lib/apt/lists/*
 
-# Download Piper executable
-RUN curl -L -o /tmp/piper.tar.gz \
-    https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz \
-    && tar -xzf /tmp/piper.tar.gz -C /usr/local/bin piper \
-    && chmod +x /usr/local/bin/piper \
-    && rm /tmp/piper.tar.gz
-    
+# Download Piper executable for the correct architecture
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        PIPER_URL="https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz"; \
+    elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
+        PIPER_URL="https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz"; \
+    else \
+        echo "Unsupported architecture: $ARCH"; \
+        exit 1; \
+    fi && \
+    curl -L -o /tmp/piper.tar.gz "$PIPER_URL" && \
+    tar -xzf /tmp/piper.tar.gz -C /usr/local/bin piper && \
+    chmod +x /usr/local/bin/piper && \
+    rm /tmp/piper.tar.gz
+
 # Environment variables used by the app
 ENV TESSERACT_CMD_PATH=/usr/bin/tesseract \
     CALIBRE_EBOOK_CONVERT_PATH=/usr/bin/ebook-convert \
     POPPLER_PATH=/usr/bin \
-    PIPER_EXECUTABLE_PATH=/usr/local/bin/piper
+    PIPER_EXECUTABLE_PATH=/usr/local/bin/piper/piper
 
 WORKDIR /app
 COPY . /app

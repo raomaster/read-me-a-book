@@ -4,6 +4,10 @@ ENV CI=true
 WORKDIR /app
 COPY . /app
 
+# Pasar la variable de entorno al build
+ARG VITE_BACKEND_URL
+ENV VITE_BACKEND_URL=${VITE_BACKEND_URL}
+
 RUN corepack enable && pnpm install --frozen-lockfile
 RUN pnpm run build   # generates /build with the PWA assets
 
