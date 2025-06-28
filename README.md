@@ -2,8 +2,27 @@
 
 **read-me-a-book** es una herramienta para convertir PDFs (incluyendo escaneados) y texto en archivos de audio. Utiliza OCR para PDFs basados en imágenes y motores TTS locales o servicios gratuitos.
 
-
 *Nota: Para el desarrollo de este proyecto, se utilizaron herramientas de IA como Gemini y ChatGPT como apoyo en la investigación y la realización de pruebas de concepto.*
+
+---
+
+## 📸 Capturas de Pantalla
+
+### 🌞 Tema Light
+<div align="center">
+  <img src="docs/front-1-1.png" alt="Tema Light - Vista Principal" width="45%" />
+  <img src="docs/front-1-2.png" alt="Tema Light - Configuración" width="45%" />
+  <img src="docs/front-1-3.png" alt="Tema Light - Lector" width="45%" />
+  <img src="docs/front-1-4.png" alt="Tema Light - Procesamiento" width="45%" />
+</div>
+
+### 🌊 Tema Ocean
+<div align="center">
+  <img src="docs/front-2-1.png" alt="Tema Ocean - Vista Principal" width="45%" />
+  <img src="docs/front-2-2.png" alt="Tema Ocean - Configuración" width="45%" />
+  <img src="docs/front-2-3.png" alt="Tema Ocean - Lector" width="45%" />
+  <img src="docs/front-2-4.png" alt="Tema Ocean - Procesamiento" width="45%" />
+</div>
 
 ---
 
