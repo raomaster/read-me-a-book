@@ -10,18 +10,20 @@
 
 ### 🌞 Tema Light
 <div align="center">
-  <img src="docs/front-1-1.png" alt="Tema Light - Vista Principal" width="45%" />
-  <img src="docs/front-1-2.png" alt="Tema Light - Configuración" width="45%" />
-  <img src="docs/front-1-3.png" alt="Tema Light - Lector" width="45%" />
-  <img src="docs/front-1-4.png" alt="Tema Light - Procesamiento" width="45%" />
+  <img src="docs/front-1-1.png" alt="Tema Light - Vista Principal" width="300" />
+  <img src="docs/front-1-2.png" alt="Tema Light - Configuración" width="300" />
+  <br>
+  <img src="docs/front-1-3.png" alt="Tema Light - Lector" width="300" />
+  <img src="docs/front-1-4.png" alt="Tema Light - Procesamiento" width="300" />
 </div>
 
 ### 🌊 Tema Ocean
 <div align="center">
-  <img src="docs/front-2-1.png" alt="Tema Ocean - Vista Principal" width="45%" />
-  <img src="docs/front-2-2.png" alt="Tema Ocean - Configuración" width="45%" />
-  <img src="docs/front-2-3.png" alt="Tema Ocean - Lector" width="45%" />
-  <img src="docs/front-2-4.png" alt="Tema Ocean - Procesamiento" width="45%" />
+  <img src="docs/front-2-1.png" alt="Tema Ocean - Vista Principal" width="300" />
+  <img src="docs/front-2-2.png" alt="Tema Ocean - Configuración" width="300" />
+  <br>
+  <img src="docs/front-2-3.png" alt="Tema Ocean - Lector" width="300" />
+  <img src="docs/front-2-4.png" alt="Tema Ocean - Procesamiento" width="300" />
 </div>
 
 ---
