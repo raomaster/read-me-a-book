@@ -1,0 +1,43 @@
+version: '3.8'
+services:
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_BACKEND_URL: ${BACKEND_URL:-https://leeme.mooo.com/api}
+    networks:
+      - app-network
+    container_name: read-me-a-book-frontend
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    networks:
+      - app-network
+    container_name: read-me-a-book-backend
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - app-network
+    container_name: read-me-a-book-caddy
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

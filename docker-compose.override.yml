@@ -1,0 +1,17 @@
+services:
+  frontend:
+    command: ["pnpm", "dev", "--host", "--port", "5173"]
+    ports:
+      - "5173:5173"
+    environment:
+      - NODE_ENV=development
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend/src
+          target: /app/src
+          ignore:
+            - node_modules/
+            - .git/
+        - action: rebuild
+          path: ./frontend/package.json

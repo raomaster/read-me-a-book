@@ -1,24 +1,37 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
-*.wav
-*.mp3
-external/*
-.vscode
-*/*.txt
-*/*.txt
-*.pdf
+*.log
+.env
+
+# IDE / Editor
+.vscode/
 
 # Ignorar todas las carpetas de datos y medios
 /data/
 /media/
-outputs/*
-output/*
+
+*.wav
+*.mp3
+external/*
+.vscode
+
+*.pdf
+
+# Archivos generados por el backend (asumiendo que outputs está en backend/)
+backend/outputs/*
+backend/uploads/* # Si usas una carpeta de subidas para Flask
+backend/**/*.txt # Si los txt generados están dentro de alguna subcarpeta de backend
+backend/**/*.pdf # Si los pdf generados/temporales están dentro de backend
+backend/**/*.wav
+backend/**/*.mp3
+
+# SvelteKit / Node.js
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+frontend/dist/ # O cualquier otro directorio de salida de SvelteKit
 
 # Archivos específicos de Docker y del sistema operativo
 .DS_Store
-*.log
-.env
-*.onnx
-models/**/*.onnx
-backend/models/**/*.onnx
