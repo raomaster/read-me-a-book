@@ -1,5 +1,6 @@
 <script lang="ts">
 	// Importaciones necesarias de Svelte y otras librerías
+	import { PUBLIC_TTS_MODE } from '$env/static/public';
 	import { page } from '$app/stores';
 	import { onMount, tick } from 'svelte';
 // Store de SvelteKit para acceder a información de la página actual (ej. parámetros de URL)
@@ -39,7 +40,17 @@
 	let ttsEngine: string = 'piper';
 	let ttsLang: string = 'es';
 	let piperVoiceKey: string = 'es_MX-claude-high';
+	// Añadimos control de velocidad (generación para XTTS y reproducción para cualquier motor)
+	let ttsSpeed: number = 1.0;        // Se usará al generar con XTTS (0.5 a 2.0 recomendado)
+	let playbackRate: number = 1.0;    // Se usará para reproducir el audio (0.75 a 2.0 recomendado)
 	let currentAudio: HTMLAudioElement | null = null;
+	let audioEl: HTMLAudioElement;
+	// NUEVO: modo de entorno ('local' | 'gcloud')
+	let ttsMode: 'local' | 'gcloud' = (PUBLIC_TTS_MODE?.toLowerCase() === 'gcloud' ? 'gcloud' : 'local');
+	// NUEVO: voz para Kokoro (solo español)
+	let kokoroVoice: string = 'ef_dora';
+	// NUEVO: nombre de voz para Cloud TTS (API)
+	let cloudVoiceName: string = '';
 let isAudioPlaying = false; // Estado de reproducción
 let lastNavigationTime = 0; // Para evitar navegaciones múltiples consecutivas
 let isUserInteracting = false; // Para detectar interacciones manuales del usuario
@@ -56,24 +67,60 @@ let currentReadingElement: HTMLElement | null = null; // legacy var to satisfy o
 
 	// ---------- Audio prefetch helpers ----------
 async function fetchAudioUrl(text: string): Promise<string> {
-    const url = new URL(`${BACKEND_URL}/text_to_audio`, window.location.origin);
-    url.searchParams.append('tts_provider', ttsEngine);
-    url.searchParams.append('lang', ttsLang);
-    if (ttsEngine === 'piper' && piperVoiceKey) {
-        url.searchParams.append('piper_voice_key', piperVoiceKey);
+    const url = new URL(`${BACKEND_URL}${ttsMode === 'gcloud' ? '' : '/text_to_audio'}`);
+
+    let response: Response;
+
+    if (ttsMode === 'local') {
+        // Local backend: usa query params y body JSON con text
+        url.searchParams.append('tts_provider', ttsEngine);
+        url.searchParams.append('lang', ttsLang);
+        if (ttsEngine === 'piper' && piperVoiceKey) {
+            url.searchParams.append('piper_voice_key', piperVoiceKey);
+        }
+        if (ttsEngine === 'kokoro' && kokoroVoice) {
+            url.searchParams.append('kokoro_voice', kokoroVoice);
+        }
+
+        console.log('TTS request (local)', {
+            text,
+            engine: ttsEngine,
+            lang: ttsLang,
+            piperVoiceKey,
+            kokoroVoice
+        });
+
+        response = await fetch(url.toString(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+        });
+    } else {
+        // GCloud backend: enviar todo en el body y sin query params
+        // provider: 'gtts' o 'cloud_tts'
+        const body: any = {
+            text,
+            provider: ttsEngine,
+            lang: ttsLang
+        };
+        if (ttsEngine === 'cloud_tts' && cloudVoiceName) {
+            body.voice_name = cloudVoiceName;
+        }
+
+        console.log('TTS request (gcloud)', body);
+
+        response = await fetch(url.toString(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
     }
-    // Debug log: show what text is sent to backend for TTS
-    console.log('TTS request', {
-        text,
-        engine: ttsEngine,
-        lang: ttsLang,
-        piperVoiceKey
-    });
-    const response = await fetch(url.toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
-    });
+
+    if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`TTS request failed: ${response.status} - ${errorText}`);
+    }
+
     const blob = await response.blob();
     return URL.createObjectURL(blob);
 }
@@ -152,6 +199,9 @@ async function playItem(index: number) {
 
     // play
     currentAudio = new Audio(audioUrl);
+			audioEl = currentAudio;
+		audioEl = currentAudio;
+		audioEl = currentAudio;
     currentAudio.volume = 0; // start muted to prevent click
     currentAudio.play();
     fadeIn(currentAudio);
@@ -249,10 +299,24 @@ $: if (viewerElement && footerElement && headerElement) {
 			const storedTtsEngine = localStorage.getItem('tts-engine');
 			const storedTtsLang = localStorage.getItem('tts-lang');
 			const storedPiperVoiceKey = localStorage.getItem('piper-voice-key');
+			const savedPlaybackRate = localStorage.getItem('playbackRate');
+			const storedTtsMode = localStorage.getItem('tts-mode');
+			const storedKokoroVoice = localStorage.getItem('kokoro-voice');
+			const storedCloudVoiceName = localStorage.getItem('cloud-voice-name');
 
 			if (storedTtsEngine) ttsEngine = storedTtsEngine;
 			if (storedTtsLang) ttsLang = storedTtsLang;
 			if (storedPiperVoiceKey) piperVoiceKey = storedPiperVoiceKey;
+			if (storedTtsMode) ttsMode = storedTtsMode as 'local' | 'gcloud';
+			if (storedKokoroVoice) kokoroVoice = storedKokoroVoice;
+			if (storedCloudVoiceName) cloudVoiceName = storedCloudVoiceName;
+			if (savedPlaybackRate) {
+				const v = parseFloat(savedPlaybackRate);
+				if (!Number.isNaN(v)) {
+					// Limitar al rango 0.5x–2.0x
+					playbackRate = Math.min(2, Math.max(0.5, v));
+				}
+			}
 		}
 
 
@@ -523,6 +587,18 @@ playItem(0);
 	$: if (browser && ttsEngine) localStorage.setItem('tts-engine', ttsEngine);
 	$: if (browser && ttsLang) localStorage.setItem('tts-lang', ttsLang);
 	$: if (browser && piperVoiceKey) localStorage.setItem('piper-voice-key', piperVoiceKey);
+	// NUEVO: persistir modo y voces adicionales
+	$: if (browser && ttsMode) localStorage.setItem('tts-mode', ttsMode);
+	$: if (browser && kokoroVoice) localStorage.setItem('kokoro-voice', kokoroVoice);
+	$: if (browser && cloudVoiceName) localStorage.setItem('cloud-voice-name', cloudVoiceName);
+	$: if (browser && audioEl) {
+		audioEl.playbackRate = playbackRate;
+		// En la mayoría de navegadores modernos se mantiene el tono por defecto.
+		// Si ves cambios de tono, podemos ajustar preservesPitch si el navegador lo soporta.
+		if ('preservesPitch' in audioEl) (audioEl as any).preservesPitch = true;
+		if ('preservesPitch' in audioEl) audioEl.preservesPitch = true;
+		localStorage.setItem('playbackRate', String(playbackRate));
+	}
 
 	async function speakText(textToSpeak: string, element?: HTMLElement) {
 		if (!textToSpeak.trim()) {
@@ -551,29 +627,50 @@ playItem(0);
 		try {
 			console.log("Text to Speech (streaming):", textToSpeak);
 
-			const url = new URL(`${BACKEND_URL}/text_to_audio`, window.location.origin);
-			url.searchParams.append('tts_provider', ttsEngine);
-			url.searchParams.append('lang', ttsLang);
-			if (ttsEngine === 'piper' && piperVoiceKey) {
-				url.searchParams.append('piper_voice_key', piperVoiceKey);
-			}
+			const url = new URL(`${BACKEND_URL}${ttsMode === 'gcloud' ? '' : '/text_to_audio'}`);
 
-			const response = await fetch(url.toString(), {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify({ text: textToSpeak })
-			});
+			let response: Response;
+
+			if (ttsMode === 'local') {
+				// Local backend: usa query params y body JSON con text
+				url.searchParams.append('tts_provider', ttsEngine);
+				url.searchParams.append('lang', ttsLang);
+				if (ttsEngine === 'piper' && piperVoiceKey) {
+					url.searchParams.append('piper_voice_key', piperVoiceKey);
+				}
+				if (ttsEngine === 'kokoro' && kokoroVoice) {
+					url.searchParams.append('kokoro_voice', kokoroVoice);
+				}
+
+				response = await fetch(url.toString(), {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ text: textToSpeak })
+				});
+			} else {
+				// GCloud backend: enviar todo en el body y sin query params
+				const body: any = {
+					text: textToSpeak,
+					provider: ttsEngine,
+					lang: ttsLang
+				};
+				if (ttsEngine === 'cloud_tts' && cloudVoiceName) {
+					body.voice_name = cloudVoiceName;
+				}
+
+				response = await fetch(url.toString(), {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(body)
+				});
+			}
 
 			if (!response.ok) {
 				let errorDetail = response.statusText;
 				try {
 					const errorData = await response.json();
-					errorDetail = errorData.detail || errorDetail;
-				} catch {
-					/* ignore parsing error */
-				}
+					errorDetail = (errorData.detail || errorData.error || errorDetail);
+				} catch { /* ignore parsing error */ }
 				throw new Error(`Backend error: ${errorDetail}`);
 			}
 
@@ -593,6 +690,7 @@ playItem(0);
 				const audioBlob = await response.blob();
 				const fallbackUrl = URL.createObjectURL(audioBlob);
 				currentAudio = new Audio(fallbackUrl);
+				audioEl = currentAudio;
                 isAudioPlaying = true;
 				currentAudio.addEventListener('play', () => { isAudioPlaying = true; });
 				currentAudio.addEventListener('pause', () => { isAudioPlaying = false; });
@@ -636,7 +734,12 @@ playItem(0);
 
 				const appendNextChunk = () => {
 					if (queue.length && !sourceBuffer.updating) {
-						sourceBuffer.appendBuffer(queue.shift()!);
+						const chunk = queue.shift()!;
+						sourceBuffer.appendBuffer(
+							chunk.buffer instanceof ArrayBuffer
+								? chunk.buffer
+								: new Uint8Array(chunk.buffer as unknown as ArrayBuffer)
+						);
 					}
 				};
 
@@ -888,9 +991,30 @@ playItem(0);
 						on:click_outside={closeSettings}
 					>
 						<div class="px-2 py-1"><ThemeSwitcher /></div>
-						<div class="px-2 py-1"><LanguageSwitcher /></div>
-						<div class="px-2 py-1"><FontSizeSwitcher currentRendition={rendition} /></div>
-						<div class="px-2 py-1"><TtsConfigurator bind:ttsEngine={ttsEngine} bind:ttsLang={ttsLang} bind:piperVoiceKey={piperVoiceKey} /></div>
+					<div class="px-2 py-1"><LanguageSwitcher /></div>
+					<div class="px-2 py-1"><FontSizeSwitcher currentRendition={rendition} /></div>
+
+					<!-- NUEVO: selector de modo -->
+					<div class="px-2 py-1">
+						<label class="block text-sm font-medium text-text-muted mb-1">Modo</label>
+						<select bind:value={ttsMode} class="w-full appearance-none bg-background hover:bg-surface border border-border rounded-md py-2 pl-3 pr-8 text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-colors duration-200 cursor-pointer">
+							<option value="local">Local</option>
+							<option value="gcloud">GCloud</option>
+						</select>
+					</div>
+
+					<!-- TTS Configurator con nuevas props -->
+					<div class="px-2 py-1">
+						<TtsConfigurator
+							bind:ttsEngine={ttsEngine}
+							bind:ttsLang={ttsLang}
+							bind:piperVoiceKey={piperVoiceKey}
+							bind:playbackRate={playbackRate}
+							mode={ttsMode}
+							bind:kokoroVoice={kokoroVoice}
+							bind:cloudVoiceName={cloudVoiceName}
+						/>
+					</div>
 					</div>
 					{/if}
 				</div>

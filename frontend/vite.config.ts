@@ -16,11 +16,12 @@ export default defineConfig({
 	server: {
 		host: true,      // equivalente a "0.0.0.0"
 		port: 80,       // cámbialo si ya tienes algo ocupando ese puerto
-		allowedHosts: ['leeme.mooo.com']
+		allowedHosts: ['leeme.mooo.com', 'frontend-1061461444755.us-central1.run.app']
 	},
 	preview: {
 		host: true,
-		port: 80
+		port: 80,
+		allowedHosts: ['leeme.mooo.com', 'frontend-1061461444755.us-central1.run.app']
   	},
 	build: {
 		outDir: 'build'

@@ -240,6 +240,51 @@
     -   **Frontend**: http://localhost:5173
     -   **API Docs**: http://localhost:8000/docs
 
+### Desarrollo Local con Google Cloud Functions
+
+Para desarrollar y probar el componente de Google Cloud Functions localmente:
+
+**Características del desarrollo local:**
+- ✅ Simula exactamente Google Cloud Functions Gen2
+- ✅ Usa Functions Framework para compatibilidad total
+- ✅ Imports relativos idénticos a producción
+- ✅ Debugging y hot reload disponibles
+- ✅ Compatible con despliegue directo a Cloud Functions
+
+**Archivos clave:**
+- `backend/src_gcloud/local_test.py`: Función principal compatible con Cloud Functions
+- `backend/src_gcloud/run_local.py`: Script para ejecutar el servidor local
+- `backend/src_gcloud/requirements.txt`: Dependencias incluyendo Functions Framework
+
+1. **Navega al directorio de Cloud Functions:**
+   ```bash
+   cd backend\src_gcloud
+   ```
+
+2. **Instala las dependencias:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Ejecuta el servidor local:**
+   ```bash
+   python run_local.py
+   ```
+
+4. **Accede al servidor:**
+   - **Servidor local**: http://localhost:8080
+   - **Health check**: http://localhost:8080/health
+
+5. **Prueba la funcionalidad:**
+   
+   **En Bash/CMD:**
+   ```bash
+   curl -X POST http://localhost:8080 \
+        -H "Content-Type: application/json" \
+        -d '{"text":"Hola mundo","provider":"gtts","lang":"es"}' \
+        --output test.mp3
+   ```
+
 ### Endpoints de la API
 
 -   `POST /pdf_to_epub`: Convierte un PDF en un EPUB

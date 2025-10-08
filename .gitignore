@@ -1,9 +1,13 @@
 # Python
-.venv/
+.venv/*
+backend/venv-backend/*
+backend/src_gcloud/.venv/*
+
 __pycache__/
 *.pyc
 *.log
 .env
+frontend/.env
 
 # IDE / Editor
 .vscode/

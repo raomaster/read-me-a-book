@@ -1,43 +1,34 @@
-anyascii>=0.3.0
-coqui-tts-trainer>=0.2.0,<0.3.0
-cython>=3.0.0
-einops>=0.6.0
-encodec>=0.1.1
-fsspec[http]>=2023.6.0
-gruut[de,es,fr]>=2.4.0
-inflect>=5.6.0
-librosa>=0.10.1
-matplotlib>=3.7.0
-monotonic-alignment-search>=0.1.0
-num2words>=0.5.14
-packaging>=23.1
-pysbd>=0.3.4
-pyyaml>=6.0
-soundfile>=0.12.0
-spacy[ja]>=3.2,<3.8
-torch>=2.1
-torchaudio>=2.1.0
-tqdm>=4.64.1
-transformers>=4.47.0
-tqdm>=4.64
-pypdf==3.17.4
-soundfile
-bark==0.1.5
-kokoro>=0.9.4
-scipy>=1.11
-accelerate>=0.24.1
-gTTS
-pytesseract
-pdf2image
-Pillow
-opencv-python
-numpy
-pydub
+# Backend core - FastAPI y dependencias web
 fastapi
 uvicorn
-gtts
-PyMuPDF # Más robusto que pypdf2 para extracción
-ebooklib # Para leer archivos EPUB
-beautifulsoup4 # Para limpiar HTML de los EPUB
 python-multipart
-dotenv
+python-dotenv
+
+# Audio processing - Necesario para todos los engines TTS
+soundfile>=0.12.0
+numpy>=2.0,<2.1
+pydub
+
+# TTS engines - Los tres motores soportados
+gTTS                    # Google Text-to-Speech
+coqui-tts>=0.26.2      # XTTS v2 y modelos Coqui
+kokoro>=0.9.4          # Kokoro TTS para japonés y español
+pyopenjtalk            # Requerido para voces japonesas de Kokoro
+# PDF processing - Para extracción de texto de PDFs
+pypdf
+PyMuPDF                # fitz (para extracción de texto)
+pdf2image              # Para convertir PDF a imágenes
+pytesseract            # OCR para PDFs que son imágenes
+Pillow                 # Requerido por pdf2image
+# opencv-python          # Requerido por pytesseract
+opencv-python==4.8.1.78  # Versión específica compatible
+
+# EPUB processing - Para conversión y extracción de EPUBs
+ebooklib               # Para leer EPUBs
+beautifulsoup4         # Para parsear HTML en EPUBs
+
+# Text processing - Utilidades de procesamiento de texto
+anyascii>=0.3.0        # Para normalización de texto
+pysbd>=0.3.4           # Para división de oraciones
+num2words>=0.5.14      # Para conversión de números a palabras
+f5-tts

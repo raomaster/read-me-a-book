@@ -10,6 +10,8 @@ import struct
 import platform # Importar platform para detectar el SO
 import uuid
 import asyncio # Importar asyncio para asyncio.sleep
+import os
+import time
 
 from pydantic import BaseModel, Field # Para generar nombres de directorio únicos
 
@@ -20,7 +22,7 @@ from .services.epub_service import convert_text_to_epub
 from .services.audio_service import extract_text_from_epub
 from .engines.engine_factory import create_engine
 from .interfaces import TextToSpeechInterface # Contrato
-from .config import PIPER_EXECUTABLE_PATH, PIPER_VOICES_CONFIG, OUTPUTS_DIR, STREAMING_CONFIG, COMPLETE_AUDIO_CONFIG
+from .config import PIPER_EXECUTABLE_PATH, PIPER_VOICES_CONFIG, OUTPUTS_DIR, STREAMING_CONFIG, COMPLETE_AUDIO_CONFIG, XTTS_CONFIG
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,9 +41,9 @@ EPUB_MEDIA_TYPE = "application/epub+zip"
 MP3_MEDIA_TYPE = "audio/mpeg"
 WAV_MEDIA_TYPE = "audio/wav"
 
-TTS_PROVIDERS: List[str] = ["gtts", "piper"]
+TTS_PROVIDERS: List[str] = ["gtts", "piper", "xtts", "kokoro"]
 # SUPPORTED_LANGUAGES: List[str] = ["es", "en"] # Already defined in config.py if needed
-SUPPORTED_LANGUAGES: List[str] = ["es", "en"]
+SUPPORTED_LANGUAGES: List[str] = XTTS_CONFIG["supported_languages"]
 
 # Asegurarse de que el directorio de salidas principal exista
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -70,7 +72,10 @@ def save_upload_file_to_temp_sync(upload_file: UploadFile, temp_dir: Path) -> Pa
 def validate_tts_parameters(
     tts_provider: str,
     piper_voice_key: Optional[str],
-    available_piper_voices_config: dict
+    available_piper_voices_config: dict,
+    xtts_speaker_wav: Optional[str] = None,
+    kokoro_voice: Optional[str] = None,
+    lang: Optional[str] = None
 ):
     """Valida los parámetros del proveedor TTS y la voz de Piper."""
     if tts_provider == "piper":
@@ -81,6 +86,41 @@ def validate_tts_parameters(
                 status_code=400,
                 detail=f"Clave de voz de Piper inválida: '{piper_voice_key}'. Disponibles: {list(available_piper_voices_config.keys())}"
             )
+    elif tts_provider == "xtts":
+        if not xtts_speaker_wav:
+            raise HTTPException(status_code=400, detail="Se requiere 'xtts_speaker_wav' cuando se usa el motor XTTS.")
+        if not os.path.exists(xtts_speaker_wav):
+            raise HTTPException(status_code=400, detail=f"Archivo de referencia de voz no encontrado: {xtts_speaker_wav}")
+    elif tts_provider == "kokoro":
+        # Voces válidas por idioma según documentación oficial
+        valid_kokoro_voices_by_lang = {
+            "es": ["ef_dora", "em_alex", "em_santa"],  # Spanish
+            "en": ["af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"],  # American English
+            "en-gb": ["bf_alice", "bf_emma", "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis"],  # British English
+            "ja": ["jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo"],  # Japanese
+            "zh": ["zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang"],  # Mandarin Chinese
+            "fr": ["ff_siwis"],  # French
+            "hi": ["hf_alpha", "hf_beta", "hm_omega", "hm_psi"],  # Hindi
+            "it": ["if_sara", "im_nicola"],  # Italian
+            "pt": ["pf_dora", "pm_alex", "pm_santa"],  # Brazilian Portuguese
+        }
+        
+        # Idiomas soportados por Kokoro
+        supported_langs = list(valid_kokoro_voices_by_lang.keys())
+        
+        if lang and lang not in supported_langs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Kokoro no soporta el idioma '{lang}'. Idiomas soportados: {supported_langs}"
+            )
+        
+        if kokoro_voice and lang:
+            valid_voices = valid_kokoro_voices_by_lang.get(lang, [])
+            if kokoro_voice not in valid_voices:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Voz '{kokoro_voice}' no válida para idioma '{lang}'. Voces disponibles: {valid_voices}"
+                )
 
 def create_wav_header(sample_rate: int, channels: int = 1, sample_width: int = 2) -> bytes:
     """
@@ -222,7 +262,11 @@ async def epub_to_audio(
     file: UploadFile = File(..., description="Archivo EPUB a convertir"),
     tts_provider: str = Query("piper", enum=TTS_PROVIDERS, description="Motor de texto a voz a usar"),
     lang: str = Query("es", enum=SUPPORTED_LANGUAGES, description="Idioma para TTS (principalmente para gTTS)"),
-    piper_voice_key: Optional[str] = Query(None, description=f"Clave de voz de Piper (requerido si tts_provider es 'piper'). Disponibles: {list(PIPER_VOICES_CONFIG.keys())}")
+    piper_voice_key: Optional[str] = Query(None, description=f"Clave de voz de Piper (requerido si tts_provider es 'piper'). Disponibles: {list(PIPER_VOICES_CONFIG.keys())}"),
+    xtts_speaker_wav: Optional[str] = Query(None, description="Archivo de referencia de voz para XTTS"),
+    xtts_speed: Optional[float] = Query(None, description="Velocidad de habla para XTTS (0.5-2.0)"),
+    xtts_temperature: Optional[float] = Query(None, description="Temperatura de muestreo para XTTS (0.1-1.0)"),
+    kokoro_voice: str = Query("ef_dora", description="Voz de Kokoro TTS (ej: 'ef_dora' para español, ver documentación para más voces)")
 ):
     """
     Recibe un archivo EPUB, extrae su texto y lo convierte en un archivo de audio
@@ -232,7 +276,7 @@ async def epub_to_audio(
     if file.content_type != EPUB_MEDIA_TYPE:
         raise HTTPException(status_code=400, detail="El archivo debe ser un EPUB.")
 
-    validate_tts_parameters(tts_provider, piper_voice_key, PIPER_VOICES_CONFIG)
+    validate_tts_parameters(tts_provider, piper_voice_key, PIPER_VOICES_CONFIG, xtts_speaker_wav, kokoro_voice, lang)
 
     # Crear un subdirectorio único dentro de OUTPUTS_DIR para esta solicitud
     output_uuid = str(uuid.uuid4())
@@ -251,7 +295,7 @@ async def epub_to_audio(
         input_epub_path = save_upload_file_to_temp_sync(file, output_dir)
 
         try:
-            logging.info(f"Extrayendo texto del EPUB: {input_epub_path}")
+            logging.info(f"📖 Extrayendo texto del EPUB: {input_epub_path}")
             text_content = extract_text_from_epub(input_epub_path)
 
             if not text_content or not text_content.strip():
@@ -262,15 +306,30 @@ async def epub_to_audio(
             text_file_path = output_dir / "texto_extraido.txt"
             with open(text_file_path, "w", encoding="utf-8") as f:
                 f.write(text_content)
-            logging.info(f"Texto extraído guardado en: {text_file_path}")
+            logging.info(f"💾 Texto extraído guardado en: {text_file_path}")
+            logging.info(f"📊 Tamaño del texto extraído: {len(text_content)} caracteres")
 
-            logging.info(f"Creando motor TTS: {tts_provider} para idioma/voz: {lang if tts_provider=='gtts' else piper_voice_key}")
+            logging.info(f"🔧 Creando motor TTS: {tts_provider}")
+            logging.info(f"🌍 Idioma: {lang}")
+            if tts_provider == "piper":
+                logging.info(f"🎤 Voz Piper: {piper_voice_key}")
+            elif tts_provider == "kokoro":
+                logging.info(f"🎤 Voz Kokoro: {kokoro_voice}")
+            elif tts_provider == "xtts":
+                logging.info(f"🎤 Archivo de referencia XTTS: {xtts_speaker_wav}")
+                logging.info(f"⚡ Velocidad XTTS: {xtts_speed}")
+                logging.info(f"🌡️  Temperatura XTTS: {xtts_temperature}")
+            
             tts_engine: TextToSpeechInterface = create_engine(
                 engine_type=tts_provider,
                 lang=lang,
                 piper_voice_key=piper_voice_key,
                 piper_executable_path=PIPER_EXECUTABLE_PATH,
-                piper_voices_config=PIPER_VOICES_CONFIG
+                piper_voices_config=PIPER_VOICES_CONFIG,
+                xtts_speaker_wav=xtts_speaker_wav,
+                xtts_speed=xtts_speed,
+                xtts_temperature=xtts_temperature,
+                kokoro_voice=kokoro_voice
             )
 
             # Generar el audio completo usando chunks más grandes
@@ -279,33 +338,47 @@ async def epub_to_audio(
             # Dividir el texto en chunks más grandes para mejor calidad
             chunks = split_text_into_chunks(text_content, COMPLETE_AUDIO_CONFIG["chunk_size"])
             logging.info(f"Texto dividido en {len(chunks)} chunks de ~{COMPLETE_AUDIO_CONFIG['chunk_size']} caracteres")
+            logging.info(f"Tamaño total del texto: {len(text_content)} caracteres")
             
             # Generar audio para cada chunk y concatenar
             audio_chunks = []
+            start_time = time.time()
+            total_audio_bytes = 0
+            
             for i, chunk in enumerate(chunks):
                 if not chunk.strip():
                     continue
                 
-                logging.info(f"Procesando chunk {i+1}/{len(chunks)} ({len(chunk)} caracteres)")
+                chunk_start_time = time.time()
+                logging.info(f"🔄 Procesando chunk {i+1}/{len(chunks)} ({len(chunk)} caracteres)")
                 
                 # Reintentos para cada chunk usando configuración
                 for attempt in range(COMPLETE_AUDIO_CONFIG["max_retries"]):
                     try:
                         chunk_audio = generate_audio_chunk_simple(tts_engine, chunk, i)
                         audio_chunks.append(chunk_audio)
+                        total_audio_bytes += len(chunk_audio)
+                        chunk_time = time.time() - chunk_start_time
+                        logging.info(f"✅ Chunk {i+1}/{len(chunks)} completado en {chunk_time:.2f}s ({len(chunk_audio)} bytes)")
                         break  # Éxito, continuar al siguiente chunk
                     except Exception as e:
-                        logging.error(f"Error al generar chunk de audio {i+1} (intento {attempt + 1}): {e}")
+                        logging.error(f"❌ Error al generar chunk de audio {i+1} (intento {attempt + 1}): {e}")
                         if attempt == COMPLETE_AUDIO_CONFIG["max_retries"] - 1:
-                            logging.error(f"Falló la generación del chunk {i+1} después de {COMPLETE_AUDIO_CONFIG['max_retries']} intentos")
+                            logging.error(f"💥 Falló la generación del chunk {i+1} después de {COMPLETE_AUDIO_CONFIG['max_retries']} intentos")
                             raise  # Re-lanzar la excepción después de todos los reintentos
                 
                 # Delay entre chunks si es necesario
                 if COMPLETE_AUDIO_CONFIG["gtts_delay"] > 0 and tts_provider == "gtts" and i < len(chunks) - 1:
                     await asyncio.sleep(COMPLETE_AUDIO_CONFIG["gtts_delay"])
             
+            total_time = time.time() - start_time
+            logging.info(f"🎵 Procesamiento completado en {total_time:.2f}s")
+            logging.info(f"📊 Estadísticas: {len(audio_chunks)} chunks procesados, {total_audio_bytes} bytes totales")
+            
             # Concatenar todos los chunks de audio
+            logging.info("🔗 Concatenando chunks de audio...")
             audio_bytes = b''.join(audio_chunks)
+            logging.info(f"✅ Audio concatenado: {len(audio_bytes)} bytes finales")
             
             # Determinar extensión y media type
             audio_extension = "mp3" if tts_provider == "gtts" else "wav"
@@ -317,8 +390,15 @@ async def epub_to_audio(
             with open(audio_file_path, "wb") as f:
                 f.write(audio_bytes)
             
-            logging.info(f"Audio generado exitosamente: {len(audio_bytes)} bytes")
-            logging.info(f"Archivo guardado en: {audio_file_path}")
+            # Calcular duración estimada del audio (aproximación)
+            sample_rate = 22050 if tts_provider == "piper" else 24000  # Aproximación
+            duration_seconds = len(audio_bytes) / (sample_rate * 2)  # 2 bytes por muestra
+            duration_minutes = duration_seconds / 60
+            
+            logging.info(f"🎵 Audio generado exitosamente: {len(audio_bytes)} bytes")
+            logging.info(f"⏱️  Duración estimada: {duration_minutes:.1f} minutos ({duration_seconds:.1f} segundos)")
+            logging.info(f"💾 Archivo guardado en: {audio_file_path}")
+            logging.info(f"🚀 Tiempo total de procesamiento: {total_time:.2f}s")
 
             # Devolver el archivo de audio usando FileResponse
             return FileResponse(
@@ -354,7 +434,11 @@ async def text_to_audio( # Removed background_tasks parameter as it's not used f
     text_input: TextToAudioRequest,
     tts_provider: str = Query("piper", enum=TTS_PROVIDERS, description="Motor de texto a utilizar"),
     lang: str = Query("es", enum=SUPPORTED_LANGUAGES, description="Idioma para TTS"),
-    piper_voice_key: Optional[str] = Query(None, description=f"Clave de voz de Piper (requerido si tts_provider es 'piper'). Disponibles: {list(PIPER_VOICES_CONFIG.keys())}")
+    piper_voice_key: Optional[str] = Query(None, description=f"Clave de voz de Piper (requerido si tts_provider es 'piper'). Disponibles: {list(PIPER_VOICES_CONFIG.keys())}"),
+    xtts_speaker_wav: Optional[str] = Query(None, description="Archivo de referencia de voz para XTTS"),
+    xtts_speed: Optional[float] = Query(None, description="Velocidad de habla para XTTS (0.5-2.0)"),
+    xtts_temperature: Optional[float] = Query(None, description="Temperatura de muestreo para XTTS (0.1-1.0)"),
+    kokoro_voice: str = Query("ef_dora", description="Voz de Kokoro TTS (ej: 'ef_dora' para español, ver documentación para más voces)")
 ):
     """_summary_
 
@@ -366,7 +450,7 @@ async def text_to_audio( # Removed background_tasks parameter as it's not used f
         piper_voice_key (_type_, optional): TTS Voice Key. Defaults to Query(None, description=f"Clave de voz de Piper (requerido si tts_provider es 'piper'). Disponibles: {list(PIPER_VOICES_CONFIG.keys())}").
     """
 
-    validate_tts_parameters(tts_provider=tts_provider, piper_voice_key=piper_voice_key, available_piper_voices_config=PIPER_VOICES_CONFIG)
+    validate_tts_parameters(tts_provider=tts_provider, piper_voice_key=piper_voice_key, available_piper_voices_config=PIPER_VOICES_CONFIG, xtts_speaker_wav=xtts_speaker_wav, kokoro_voice=kokoro_voice, lang=lang)
 
     text_content = text_input.text
     if not text_content or not text_content.strip():
@@ -379,7 +463,11 @@ async def text_to_audio( # Removed background_tasks parameter as it's not used f
             lang=lang,
             piper_voice_key=piper_voice_key,
             piper_executable_path=PIPER_EXECUTABLE_PATH, # Ensure these are passed
-            piper_voices_config=PIPER_VOICES_CONFIG # Ensure these are passed
+            piper_voices_config=PIPER_VOICES_CONFIG, # Ensure these are passed
+            xtts_speaker_wav=xtts_speaker_wav,
+            xtts_speed=xtts_speed,
+            xtts_temperature=xtts_temperature,
+            kokoro_voice=kokoro_voice
         )
 
         # output_extension = "mp3" if tts_provider == "gtts" else "wav" # Removed: variable is unused

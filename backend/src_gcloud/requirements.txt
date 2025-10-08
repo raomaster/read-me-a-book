@@ -1,0 +1,4 @@
+functions-framework==3.*
+flask==2.*
+gtts==2.*
+google-cloud-texttospeech==2.*
