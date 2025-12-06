@@ -1,0 +1,74 @@
+# Archivos de entorno (contienen secretos o configuraciones locales)
+.env
+.env.*
+*.env
+
+# Archivo de anulación de Docker Compose (usado para configuraciones locales)
+docker-compose.override.yml
+
+# Carpetas de datos y configuración específicas de Audiobookshelf
+# El contenido de estas carpetas es generado y gestionado por la aplicación
+# y/o volúmenes de Docker. No deberían estar en el control de versiones.
+
+# Para mantener la estructura de carpetas en Git (ej. 'config/', 'metadata/'),
+# crea un archivo vacío llamado '.gitkeep' dentro de cada una de estas carpetas
+# y descomenta las líneas correspondientes de '!nombre_carpeta/.gitkeep'.
+
+# Ejemplo:
+# config/*
+# !config/.gitkeep
+# metadata/*
+# !metadata/.gitkeep
+
+# Por defecto, ignoramos el contenido de estas carpetas.
+# Si las carpetas en sí no deben ser rastreadas (incluso vacías), puedes usar /config/, /metadata/, etc.
+
+# --- Estructura de carpetas para Docker ---
+# Ignorar contenido de subcarpetas específicas, pero mantener su estructura con .gitkeep
+
+# Contenido de data/config
+data/config/*
+!data/config/.gitkeep
+
+# Contenido de data/metadata
+data/metadata/*
+!data/metadata/.gitkeep
+
+# Contenido de data/tailscale
+data/tailscale/*
+!data/tailscale/.gitkeep
+
+# Contenido de media/audiobooks
+media/audiobooks/*
+!media/audiobooks/.gitkeep
+
+# Contenido de media/ebooks
+media/ebooks/*
+!media/ebooks/.gitkeep
+
+# Contenido de media/comics
+media/comics/*
+!media/comics/.gitkeep
+
+# Contenido de media/podcasts
+media/podcasts/*
+!media/podcasts/.gitkeep
+
+# Contenido de backups (si es una carpeta de primer nivel que quieres mantener vacía)
+backups/*
+!backups/.gitkeep
+
+# Archivos de log
+*.log
+logs/
+
+# Archivos generados por el sistema operativo o temporales
+.DS_Store
+Thumbs.db
+._*
+
+# Archivos específicos de editores/IDEs
+.vscode/
+.idea/
+*.swp
+*~

@@ -1,0 +1,17 @@
+# Evitar subir archivos locales al build de Cloud Functions/Run
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Git
+.git/
+.gitignore
+
+# Node
+node_modules/
+
+# Otros comunes
+.DS_Store
