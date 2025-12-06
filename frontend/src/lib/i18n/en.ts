@@ -14,6 +14,7 @@ export default {
     ocean: "Ocean",
   },
   languageLabel: "Language",
+  'Playback Speed': 'Playback Speed',
   reader: {
     pageTitle: "Reader",
     metaDescription: "Reading {bookTitle}",
@@ -40,5 +41,8 @@ export default {
     ttsEngineLabel: "TTS Engine",
     ttsLanguageLabel: "TTS Language",
     piperVoiceLabel: "Piper Voice",
+    kokoroVoiceLabel: "Kokoro Voice",
+    gttsVoiceLabel: "gTTS Voice",
+    playbackSpeedLabel: "Playback Speed",
   }
 };

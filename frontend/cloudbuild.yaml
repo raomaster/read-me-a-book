@@ -1,0 +1,13 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - gcr.io/$PROJECT_ID/frontend:${_TAG}
+      - --build-arg
+      - VITE_BACKEND_URL=${_BACKEND_URL}
+      - --build-arg
+      - PUBLIC_TTS_MODE=${_PUBLIC_TTS_MODE}
+      - .
+images:
+  - gcr.io/$PROJECT_ID/frontend:${_TAG}

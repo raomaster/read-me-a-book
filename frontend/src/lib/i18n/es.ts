@@ -14,6 +14,7 @@ export default {
     ocean: "Océano",
   },
   languageLabel: "Idioma",
+  'Playback Speed': 'Velocidad de reproducción',
   reader: {
     pageTitle: "Lector",
     metaDescription: "Leyendo {bookTitle}",
@@ -35,10 +36,13 @@ export default {
       small: "Pequeño",
       normal: "Normal",
       large: "Grande",
-            extraLarge: "Muy Grande",
+      extraLarge: "Muy Grande",
     },
     ttsEngineLabel: "Motor TTS",
     ttsLanguageLabel: "Idioma TTS",
     piperVoiceLabel: "Voz de Piper",
+    kokoroVoiceLabel: "Voz de Kokoro",
+    gttsVoiceLabel: "Voz de gTTS",
+    playbackSpeedLabel: "Velocidad de reproducción",
   }
 };
