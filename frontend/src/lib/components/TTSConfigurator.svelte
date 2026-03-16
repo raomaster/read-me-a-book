@@ -48,35 +48,78 @@
         { value: 'es_MX-laura-high', label: 'Spanish (Mexico) - Laura High' }
     ];
 
-    // Voces para Cloud TTS (API) — ampliadas en español (es-ES y es-US)
+    // Voces para Cloud TTS (API) — lista real de Google Cloud TTS con géneros
     const cloudTtsVoices = [
-        // Español (España) - Standard
-        { name: 'es-ES-Standard-A', label: 'es-ES Standard A' },
-        { name: 'es-ES-Standard-B', label: 'es-ES Standard B' },
-        { name: 'es-ES-Standard-C', label: 'es-ES Standard C' },
-        { name: 'es-ES-Standard-D', label: 'es-ES Standard D' },
+        // === es-ES (España) - Standard ===
+        { name: 'es-ES-Standard-A', label: 'es-ES Standard A (F)' },
+        { name: 'es-ES-Standard-B', label: 'es-ES Standard B (M)' },
+        { name: 'es-ES-Standard-C', label: 'es-ES Standard C (F)' },
+        { name: 'es-ES-Standard-D', label: 'es-ES Standard D (F)' },
 
-        // Español (España) - WaveNet
-        { name: 'es-ES-Wavenet-A', label: 'es-ES WaveNet A' },
-        { name: 'es-ES-Wavenet-B', label: 'es-ES WaveNet B' },
-        { name: 'es-ES-Wavenet-C', label: 'es-ES WaveNet C' },
-        { name: 'es-ES-Wavenet-D', label: 'es-ES WaveNet D' },
+        // === es-ES - WaveNet (no existe Wavenet-A para es-ES) ===
+        { name: 'es-ES-Wavenet-B', label: 'es-ES WaveNet B (M)' },
+        { name: 'es-ES-Wavenet-C', label: 'es-ES WaveNet C (F)' },
+        { name: 'es-ES-Wavenet-D', label: 'es-ES WaveNet D (F)' },
 
-        // Español (Estados Unidos) - Standard
-        { name: 'es-US-Standard-A', label: 'es-US Standard A' },
-        { name: 'es-US-Standard-B', label: 'es-US Standard B' },
-        { name: 'es-US-Standard-C', label: 'es-US Standard C' },
-        { name: 'es-US-Standard-D', label: 'es-US Standard D' },
+        // === es-ES - Neural2 ===
+        { name: 'es-ES-Neural2-A', label: 'es-ES Neural2 A (F)' },
+        { name: 'es-ES-Neural2-B', label: 'es-ES Neural2 B (M)' },
+        { name: 'es-ES-Neural2-C', label: 'es-ES Neural2 C (F)' },
+        { name: 'es-ES-Neural2-D', label: 'es-ES Neural2 D (F)' },
+        { name: 'es-ES-Neural2-E', label: 'es-ES Neural2 E (F)' },
+        { name: 'es-ES-Neural2-F', label: 'es-ES Neural2 F (M)' },
 
-        // Español (Estados Unidos) - WaveNet
-        { name: 'es-US-Wavenet-A', label: 'es-US WaveNet A' },
-        { name: 'es-US-Wavenet-B', label: 'es-US WaveNet B' },
-        { name: 'es-US-Wavenet-C', label: 'es-US WaveNet C' },
-        { name: 'es-US-Wavenet-D', label: 'es-US WaveNet D' },
+        // === es-ES - Journey (OP) ===
+        { name: 'es-ES-Journey-O', label: 'es-ES OP Journey O (F)' },
 
-        // Opcional: deja algunas en inglés por si eliges ttsLang='en'
-        { name: 'en-US-Standard-A', label: 'en-US Standard A' },
-        { name: 'en-US-Standard-B', label: 'en-US Standard B' }
+        // === es-ES - Voces especiales ===
+        { name: 'es-ES-Chirp3-HD-Aoede',  label: 'es-ES OP Celeste (F)' },
+        { name: 'es-ES-Chirp3-HD-Fenrir', label: 'es-ES OP Draco (M)' },
+
+        // === es-US (Español América) - Standard (solo A, B, C — no existe D) ===
+        { name: 'es-US-Standard-A', label: 'es-US Standard A (F)' },
+        { name: 'es-US-Standard-B', label: 'es-US Standard B (M)' },
+        { name: 'es-US-Standard-C', label: 'es-US Standard C (M)' },
+
+        // === es-US - WaveNet (solo A, B, C — no existe D) ===
+        { name: 'es-US-Wavenet-A', label: 'es-US WaveNet A (F)' },
+        { name: 'es-US-Wavenet-B', label: 'es-US WaveNet B (M)' },
+        { name: 'es-US-Wavenet-C', label: 'es-US WaveNet C (F)' },
+
+        // === es-US - Neural2 ===
+        { name: 'es-US-Neural2-A', label: 'es-US Neural2 A (F)' },
+        { name: 'es-US-Neural2-B', label: 'es-US Neural2 B (M)' },
+        { name: 'es-US-Neural2-C', label: 'es-US Neural2 C (F)' },
+
+        // === es-US - Journey (OP) ===
+        { name: 'es-US-Journey-D', label: 'es-US OP Journey D (M)' },
+        { name: 'es-US-Journey-F', label: 'es-US OP Journey F (F)' },
+        { name: 'es-US-Journey-O', label: 'es-US OP Journey O (F)' },
+
+        // === es-US - News ===
+        { name: 'es-US-News-D', label: 'es-US News D (M)' },
+        { name: 'es-US-News-E', label: 'es-US News E (F)' },
+        { name: 'es-US-News-F', label: 'es-US News F (F)' },
+        { name: 'es-US-News-G', label: 'es-US News G (M)' },
+
+        // === es-US - Voces especiales ===
+        { name: 'es-US-Chirp3-HD-Leda',  label: 'es-US OP Celeste (F)' },
+        { name: 'es-US-Chirp3-HD-Orus',  label: 'es-US OP Draco (M)' },
+
+        // === English (en-US) ===
+        { name: 'en-US-Standard-A', label: 'en-US Standard A (M)' },
+        { name: 'en-US-Standard-B', label: 'en-US Standard B (M)' },
+        { name: 'en-US-Standard-C', label: 'en-US Standard C (F)' },
+        { name: 'en-US-Standard-D', label: 'en-US Standard D (M)' },
+        { name: 'en-US-Standard-E', label: 'en-US Standard E (F)' },
+        { name: 'en-US-Standard-F', label: 'en-US Standard F (F)' },
+        { name: 'en-US-Neural2-A',  label: 'en-US Neural2 A (M)' },
+        { name: 'en-US-Neural2-C',  label: 'en-US Neural2 C (F)' },
+        { name: 'en-US-Neural2-D',  label: 'en-US Neural2 D (M)' },
+        { name: 'en-US-Neural2-F',  label: 'en-US Neural2 F (F)' },
+        { name: 'en-US-Journey-D',  label: 'en-US OP Journey D (M)' },
+        { name: 'en-US-Journey-F',  label: 'en-US OP Journey F (F)' },
+        { name: 'en-US-Journey-O',  label: 'en-US OP Journey O (F)' },
     ];
 
     // Filtrado por idioma seleccionado

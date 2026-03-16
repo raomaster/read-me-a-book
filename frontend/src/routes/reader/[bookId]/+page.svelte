@@ -2,7 +2,7 @@
 	// Importaciones necesarias de Svelte y otras librerías
 	import { PUBLIC_TTS_MODE } from '$env/static/public';
 	import { page } from '$app/stores';
-	import { onMount, tick } from 'svelte';
+	import { onMount, onDestroy, tick } from 'svelte';
 	// Store de SvelteKit para acceder a información de la página actual (ej. parámetros de URL)
 	import { bookStore, type Book } from '$lib/store/book.store'; // Nuestro store de libros y la interfaz Book
 	import ePub, { type Book as EpubBookInstance, type Rendition } from 'epubjs';
@@ -381,6 +381,9 @@
 		currentAudio.play();
 		fadeIn(currentAudio);
 		isAudioPlaying = true;
+		setupMediaSession();
+		if (browser && 'mediaSession' in navigator)
+			navigator.mediaSession.playbackState = 'playing';
 
 		// Cuando el audio termina, reproducimos el siguiente o giramos de página si la cola se agotó.
 		currentAudio.addEventListener('ended', async () => {
@@ -424,6 +427,15 @@
 			}
 		}
 	}
+
+	onDestroy(() => {
+		if (browser && 'mediaSession' in navigator) {
+			navigator.mediaSession.playbackState = 'none';
+			navigator.mediaSession.setActionHandler('play', null);
+			navigator.mediaSession.setActionHandler('pause', null);
+			navigator.mediaSession.setActionHandler('stop', null);
+		}
+	});
 
 	onMount(() => {
 		// Ensure epubInstance and rendition are reset if the component re-initializes
@@ -708,7 +720,18 @@
 
 		initEpubViewer(); // Llamar a la función asíncrona para inicializar el visor.
 
+		// Reanudar audio cuando el usuario vuelve de pantalla bloqueada
+		const handleVisibilityChange = () => {
+			if (!document.hidden && currentAudio && currentAudio.paused && isAudioPlaying) {
+				currentAudio.play().catch(() => {});
+				if ('mediaSession' in navigator)
+					navigator.mediaSession.playbackState = 'playing';
+			}
+		};
+		document.addEventListener('visibilitychange', handleVisibilityChange);
+
 		return () => {
+			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			cleanupPreviousInstance(); // Use the centralized cleanup
 			// Reset states for a clean slate if the component is somehow re-used or for clarity
 			isLoading = true;
@@ -958,14 +981,50 @@
 		isSettingsOpen = false;
 	}
 
+	function setupMediaSession() {
+		if (!browser || !('mediaSession' in navigator)) return;
+		navigator.mediaSession.metadata = new MediaMetadata({
+			title: currentBook?.title ?? 'Leyendo...',
+			artist: 'Voxenfy',
+			album: currentBook?.title ?? '',
+			artwork: [
+				{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+				{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }
+			]
+		});
+		navigator.mediaSession.setActionHandler('play', () => {
+			currentAudio?.play();
+			isAudioPlaying = true;
+			navigator.mediaSession.playbackState = 'playing';
+		});
+		navigator.mediaSession.setActionHandler('pause', () => {
+			currentAudio?.pause();
+			isAudioPlaying = false;
+			navigator.mediaSession.playbackState = 'paused';
+		});
+		navigator.mediaSession.setActionHandler('stop', () => {
+			if (currentAudio) {
+				currentAudio.pause();
+				currentAudio.src = '';
+				currentAudio = null;
+			}
+			isAudioPlaying = false;
+			navigator.mediaSession.playbackState = 'none';
+		});
+	}
+
 	function toggleAudio() {
 		if (!currentAudio) return;
 		if (currentAudio.paused) {
 			currentAudio.play();
 			isAudioPlaying = true;
+			if (browser && 'mediaSession' in navigator)
+				navigator.mediaSession.playbackState = 'playing';
 		} else {
 			currentAudio.pause();
 			isAudioPlaying = false;
+			if (browser && 'mediaSession' in navigator)
+				navigator.mediaSession.playbackState = 'paused';
 		}
 	}
 
