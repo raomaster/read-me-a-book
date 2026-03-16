@@ -39,3 +39,19 @@ frontend/dist/ # O cualquier otro directorio de salida de SvelteKit
 
 # Archivos específicos de Docker y del sistema operativo
 .DS_Store
+
+# Firebase caché local (no necesario para CI/CD, solo firebase.json y .firebaserc)
+.firebase/
+
+# Modelos de voz TTS (binarios pesados, se descargan en runtime)
+backend/models/
+
+# Resultados de escaneos de seguridad (locales, no van al repo)
+gitleaks-results.json
+semgrep-results.json
+
+# Claude Code (configuración local del IDE)
+.claude/
+
+# Prompts de contexto para AI (no son código del proyecto)
+TTS_BUG_PROMPT.md

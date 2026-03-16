@@ -19,8 +19,6 @@
 	import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
 	import TtsConfigurator from '$lib/components/TTSConfigurator.svelte';
 	import themeStore, { type Theme } from '$lib/store/theme.store';
-	import { shouldTurnPageFromGeometry } from '$lib/utils/readerVisibility';
-	import { needsPageTurn } from '$lib/utils/pageTurnLogic';
 
 	// --- Variables de estado del componente ---
 	let currentBook: Book | undefined; // Almacenará el objeto del libro que se está leyendo
@@ -58,14 +56,176 @@
 	let lastNavigationTime = 0; // Para evitar navegaciones múltiples consecutivas
 	let isUserInteracting = false; // Para detectar interacciones manuales del usuario
 	let hasNavigatedThisPage = false; // Para evitar múltiples navegaciones en la misma página
+	let isTurningPagePromise: Promise<void> | null = null;
+	let resolveTurnPage: (() => void) | null = null;
 	interface QueueItem {
 		text: string;
 		elements: HTMLElement[];
 		audioUrlPromise?: Promise<string>; // blob URL pre-fetched
+		cfi?: string; // Add CFI to reconnect elements if detached
 	}
 	let readingQueue: QueueItem[] = []; // Cola con buffer adelantado
 	let currentReadingElements: HTMLElement[] = []; // todos los elementos resaltados actualmente
 	let currentReadingElement: HTMLElement | null = null; // legacy var to satisfy old refs
+
+	// ---------- Helpers de cola y navegación ----------
+	const MAX_CHUNK = 800;
+	function splitIntoChunks(txt: string): string[] {
+		if (txt.length <= MAX_CHUNK) return [txt];
+		const parts: string[] = [];
+		let remaining = txt.trim();
+		while (remaining.length) {
+			let sliceEnd = remaining.lastIndexOf(' ', MAX_CHUNK);
+			if (sliceEnd < MAX_CHUNK * 0.6) sliceEnd = MAX_CHUNK;
+			parts.push(remaining.slice(0, sliceEnd).trim());
+			remaining = remaining.slice(sliceEnd).trim();
+		}
+		return parts;
+	}
+
+	function getEpubIframe(): HTMLIFrameElement | null {
+		return viewerElement?.querySelector('iframe') ?? null;
+	}
+
+	/**
+	 * Construye la cola de lectura con los elementos visibles en el viewport actual.
+	 * Soporta modo spread (2 iframes side-by-side) y modo single-page (1 iframe).
+	 * Si se proporciona startFrom, la cola empieza desde ese elemento.
+	 */
+	function buildPageQueue(startFrom: HTMLElement | null = null): QueueItem[] {
+		if (!rendition || !epubInstance || !viewerElement) return [];
+
+		// En modo spread Epub.js puede usar múltiples iframes (uno por página visible).
+		const iframes = Array.from(viewerElement.querySelectorAll('iframe')) as HTMLIFrameElement[];
+		if (iframes.length === 0) return [];
+
+		const buffer = 8;
+		const viewerRect = viewerElement.getBoundingClientRect();
+		const viewerWidth = viewerElement.clientWidth;
+		const currentLoc = rendition.currentLocation() as any;
+
+		const result: QueueItem[] = [];
+		// startLocated: si startFrom ya fue encontrado en algún iframe previo
+		let startLocated = startFrom === null;
+
+		for (const iframe of iframes) {
+			const doc = iframe.contentDocument;
+			if (!doc?.body) continue;
+
+			// Posición horizontal del iframe dentro del viewer (puede ser 0 para el izquierdo, ~vw/2 para el derecho)
+			const iframeOffsetLeft = iframe.getBoundingClientRect().left - viewerRect.left;
+			const iframeWidth = iframe.clientWidth;
+
+			// Ignorar iframes completamente fuera del área visible
+			if (iframeOffsetLeft + iframeWidth <= -buffer || iframeOffsetLeft >= viewerWidth + buffer) continue;
+
+			// Obtener la sección del spine para este iframe (para generar CFIs correctos)
+			let section: any;
+			try {
+				const view = (rendition as any).manager?.views?._views?.find(
+					(v: any) => v.element === iframe || v.iframe === iframe
+				);
+				section = view?.section
+					?? (Number.isInteger(currentLoc?.start?.index)
+						? epubInstance!.spine.get(currentLoc.start.index)
+						: undefined);
+			} catch {}
+
+			// ¿El startFrom pertenece a este iframe?
+			const startInThisIframe = startFrom != null && startFrom.ownerDocument === doc;
+
+			// Si aún no encontramos startFrom y no está en este iframe, saltar este iframe
+			if (!startLocated && !startInThisIframe) continue;
+
+			const allBlocks = Array.from(
+				doc.body.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6')
+			) as HTMLElement[];
+
+			// Filtrar: solo elementos cuya posición ABSOLUTA (iframe offset + rect.left) esté dentro del viewer
+			const pageElements = allBlocks.filter((el) => {
+				const rect = el.getBoundingClientRect();
+				if (rect.width === 0 && rect.height === 0) return false;
+				const absLeft = rect.left + iframeOffsetLeft;
+				return absLeft >= -buffer && absLeft < viewerWidth - buffer;
+			});
+
+			let startIdx = 0;
+			if (!startLocated && startInThisIframe) {
+				const foundIdx = pageElements.indexOf(startFrom!);
+				startIdx = foundIdx >= 0 ? foundIdx : 0;
+				startLocated = true;
+			}
+
+			for (const el of pageElements.slice(startIdx)) {
+				const txt = el.textContent?.trim() || '';
+				if (!txt) continue;
+				let elCfi: string | undefined;
+				try {
+					if (section?.cfiFromElement) elCfi = section.cfiFromElement(el);
+				} catch {}
+				splitIntoChunks(txt).forEach((chunk) =>
+					result.push({ text: chunk, elements: [el], cfi: elCfi })
+				);
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * Gira a la siguiente página y reconstruye la cola para continuar la narración.
+	 * Llamado cuando la cola se agota (último párrafo de la página terminó).
+	 */
+	async function continueToNextPage() {
+		if (!rendition) {
+			isAudioPlaying = false;
+			return;
+		}
+
+		isTurningPagePromise = new Promise((resolve) => {
+			resolveTurnPage = resolve;
+			// Seguro de timeout: si relocated no llega en 3s, continuar de todas formas
+			setTimeout(() => {
+				if (resolveTurnPage) {
+					resolveTurnPage();
+					resolveTurnPage = null;
+					isTurningPagePromise = null;
+				}
+			}, 3000);
+		});
+
+		try {
+			await rendition.next();
+		} catch (err) {
+			console.warn('[TTS] Page turn failed:', err);
+			if (resolveTurnPage) {
+				resolveTurnPage();
+				resolveTurnPage = null;
+				isTurningPagePromise = null;
+			}
+			isAudioPlaying = false;
+			return;
+		}
+
+		// Esperar a que relocated confirme la nueva página
+		await isTurningPagePromise;
+
+		// Esperamos un frame de render para garantizar que Epub.js haya aplicado
+		// el CSS transform/scroll y el layout de los iframes esté actualizado.
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+		// Reconstruir cola para la nueva página
+		readingQueue = buildPageQueue();
+		const iframe2 = getEpubIframe();
+		console.log('[TTS] New page queue size:', readingQueue.length,
+			'| iframeWidth:', iframe2?.contentWindow?.innerWidth,
+			'| viewerWidth:', viewerElement?.clientWidth,
+			'| first left:', readingQueue[0]?.elements[0]?.getBoundingClientRect().left);
+		if (readingQueue.length > 0) {
+			playItem(0);
+		} else {
+			isAudioPlaying = false;
+		}
+	}
 
 	// ---------- Audio prefetch helpers ----------
 	async function fetchAudioUrl(text: string): Promise<string> {
@@ -140,65 +300,22 @@
 		const item = readingQueue[index];
 		const targetElement = item.elements?.[0];
 
+		if (isTurningPagePromise) {
+			await isTurningPagePromise;
+		}
+
 		// Clear previous highlights first
 		clearHighlight();
+
+		// En Epub.js 0.3.x los nodos de las páginas no se destruyen en paginated mode (siguen vivos en columnas ocultas del DOM).
+		// Re-vincularlos desde el CFI falla porque retorna un rango ampliado, volviendo amarillo todo el libro.
+		// Así que confiaremos en las referencias originales de HTMLElement guardadas en 'elements'.
 
 		// Get the elements to highlight
 		currentReadingElements = item.elements;
 
-		// If the target element is beyond the current visible range, advance using CFI when possible, else next().
-		if (rendition && epubInstance && viewerElement && targetElement && !hasNavigatedThisPage) {
-			try {
-				const currentLoc = rendition.currentLocation() as any;
-				const spineIndex = currentLoc?.start?.index;
-				const section = Number.isInteger(spineIndex) ? epubInstance.spine.get(spineIndex) : undefined;
-				const elCfi = section?.cfiFromElement?.(targetElement);
-				const locations = (epubInstance as any)?.locations;
-
-				if (elCfi && locations && typeof locations.locationFromCfi === 'function') {
-					const endCfi = currentLoc?.end?.cfi ?? currentLoc?.start?.cfi;
-					const endIndex = locations.locationFromCfi(endCfi);
-					const elementIndex = locations.locationFromCfi(elCfi);
-					const rect = targetElement.getBoundingClientRect();
-					const viewportWidth = viewerElement.clientWidth;
-					const spreadWidth = viewerElement.clientWidth;
-
-					const shouldTurn = needsPageTurn({
-						elementIndex,
-						endIndex,
-						lastNavigationTime,
-						now: Date.now(),
-						rect,
-						viewportWidth,
-						spreadWidth
-					});
-
-					if (shouldTurn) {
-						const turnAttemptTime = Date.now();
-						let turned = false;
-
-						try {
-							await rendition.display(elCfi);
-							turned = true;
-						} catch (err) {
-							console.warn('[TTS] Page turn via display failed, falling back to next():', err);
-							try {
-								await rendition.next();
-								turned = true;
-							} catch (err2) {
-								console.warn('[TTS] Page turn via next() failed:', err2);
-							}
-						}
-
-						if (turned) {
-							hasNavigatedThisPage = true;
-							lastNavigationTime = turnAttemptTime;
-						}
-					}
-				}
-			} catch (err) {
-				console.warn('[TTS] Direct navigation to element failed, will continue:', err);
-			}
+		if (isTurningPagePromise) {
+			await isTurningPagePromise;
 		}
 
 		// Apply the highlight
@@ -265,117 +382,20 @@
 		fadeIn(currentAudio);
 		isAudioPlaying = true;
 
-		// Add event listener for when audio starts playing
-		currentAudio.addEventListener(
-			'play',
-			() => {
-				// Geometric check for page turn
-				if (
-					index > 0 &&
-					isAudioPlaying &&
-					!isUserInteracting &&
-					!hasNavigatedThisPage &&
-					currentReadingElements.length > 0 &&
-					viewerElement &&
-					rendition
-				) {
-					try {
-						const el = currentReadingElements[0];
-						// Prefer location index comparison to avoid column-based false positives.
-						let alreadyTurned = false;
-						if (rendition && epubInstance) {
-							const currentLoc = rendition.currentLocation() as any;
-							const spineIndex = currentLoc?.start?.index;
-							const currentStartCfi = currentLoc?.start?.cfi;
-							const currentEndCfi = currentLoc?.end?.cfi;
-							const locations = (epubInstance as any)?.locations;
-
-							if (
-								locations &&
-								typeof locations.locationFromCfi === 'function' &&
-								typeof currentStartCfi === 'string' &&
-								typeof currentEndCfi === 'string' &&
-								Number.isInteger(spineIndex)
-							) {
-								const section = epubInstance.spine.get(spineIndex);
-								const elCfi = section?.cfiFromElement?.(el);
-
-								if (typeof elCfi === 'string') {
-									const currentIndex = locations.locationFromCfi(currentStartCfi);
-									const endIndex = locations.locationFromCfi(currentEndCfi);
-									const elementIndex = locations.locationFromCfi(elCfi);
-
-									// Turn only if the element lies beyond the current visible range.
-									if (
-										Number.isFinite(currentIndex) &&
-										Number.isFinite(elementIndex) &&
-										Number.isFinite(endIndex) &&
-										elementIndex > endIndex
-									) {
-										const now = Date.now();
-										if (now - lastNavigationTime < 2000) {
-											console.log('[TTS] Debouncing page turn (too soon).');
-											return;
-										}
-
-										console.log(
-											`[TTS] Element page index ${elementIndex} is beyond current page window ${currentIndex}-${endIndex}. Turning page...`
-										);
-										lastNavigationTime = now;
-										hasNavigatedThisPage = true;
-										rendition.next();
-										alreadyTurned = true;
-									}
-								}
-							}
-						}
-						if (alreadyTurned) return;
-					} catch (e) {
-						console.warn('[TTS] Error in CFI visibility check, falling back to geometric:', e);
-						// Fallback: Geometric check (Safe version)
-						try {
-							const el = currentReadingElements[0];
-							if (el && viewerElement) {
-								const rect = el.getBoundingClientRect();
-								const viewportWidth = viewerElement.clientWidth;
-
-								// Try to detect spread (two-column) width to avoid early page turns between columns.
-								let spreadWidth: number | undefined;
-								const ownerDoc = el.ownerDocument;
-								const bodyStyle = ownerDoc?.defaultView?.getComputedStyle(ownerDoc.body);
-								const colWidth = parseFloat(bodyStyle?.columnWidth || '0');
-								const colGap = parseFloat(bodyStyle?.columnGap || '0');
-								if (Number.isFinite(colWidth) && colWidth > 0 && viewerElement.clientWidth > 0) {
-									const approxColumns = Math.max(
-										1,
-										Math.round(viewerElement.clientWidth / Math.max(colWidth + colGap, colWidth))
-									);
-									spreadWidth = colWidth * approxColumns + colGap * (approxColumns - 1);
-								}
-
-								// Detect elements that spill into the next column/page, even if they start on the current one.
-								if (shouldTurnPageFromGeometry(rect, viewportWidth, 20, spreadWidth)) {
-									const now = Date.now();
-									if (now - lastNavigationTime < 2000) return;
-
-									console.log(
-										`[TTS] (Fallback) Element off current page (left=${rect.left}, right=${rect.right}, spreadWidth=${spreadWidth ?? viewportWidth}). Turning page...`
-									);
-									lastNavigationTime = now;
-									hasNavigatedThisPage = true;
-									rendition.next();
-								}
-							}
-						} catch (err) {
-							console.error('[TTS] Fallback check failed:', err);
-						}
-					}
+		// Cuando el audio termina, reproducimos el siguiente o giramos de página si la cola se agotó.
+		currentAudio.addEventListener('ended', async () => {
+			const nextIndex = index + 1;
+			if (nextIndex >= readingQueue.length) {
+				// Cola agotada: girar página y continuar si TTS sigue activo
+				if (isAudioPlaying && rendition) {
+					await continueToNextPage();
+				} else {
+					isAudioPlaying = false;
 				}
-			},
-			{ once: true }
-		);
-
-		currentAudio.addEventListener('ended', () => playItem(index + 1), { once: true });
+				return;
+			}
+			playItem(nextIndex);
+		}, { once: true });
 	}
 
 	let isSettingsOpen = false;
@@ -572,7 +592,6 @@
 					}
 					clearHighlight();
 					readingQueue = [];
-					hasNavigatedThisPage = false; // Reset navigation flag for new reading session
 
 					const target = event.target as HTMLElement | null;
 					if (!target) return;
@@ -580,38 +599,19 @@
 					const blockElement = target.closest('p, li, h1, h2, h3, h4, h5, h6');
 					if (!blockElement) return;
 
-					// --------- CONSTRUCCIÓN DE COLA Y REPRODUCCIÓN ---------
-					const MAX_CHUNK = 800;
-					const splitIntoChunks = (txt: string) => {
-						if (txt.length <= MAX_CHUNK) return [txt];
-						const parts: string[] = [];
-						let remaining = txt.trim();
-						while (remaining.length) {
-							let sliceEnd = remaining.lastIndexOf(' ', MAX_CHUNK);
-							if (sliceEnd < MAX_CHUNK * 0.6) sliceEnd = MAX_CHUNK;
-							parts.push(remaining.slice(0, sliceEnd).trim());
-							remaining = remaining.slice(sliceEnd).trim();
-						}
-						return parts;
-					};
-					let walker: HTMLElement | null = blockElement as HTMLElement;
-					while (walker) {
-						const txt = walker.textContent?.trim() || '';
-						if (txt)
-							splitIntoChunks(txt).forEach((chunk) =>
-								readingQueue.push({ text: chunk, elements: [walker!] })
-							);
-						walker = walker.nextElementSibling as HTMLElement | null;
-					}
+					// --------- CONSTRUCCIÓN DE COLA PARA PÁGINA ACTUAL Y REPRODUCCIÓN ---------
+					readingQueue = buildPageQueue(blockElement as HTMLElement);
 					console.log('Queue size', readingQueue.length);
-					playItem(0);
+					if (readingQueue.length > 0) playItem(0);
 				});
 
 				// Manejar cambios de ubicación (evento correcto: 'relocated')
 				tempRendition.on('relocated', (location: any) => {
-					// Reset navigation flag when page actually changes
-					hasNavigatedThisPage = false;
-					console.log('Relocated: hasNavigatedThisPage reset to false');
+					if (resolveTurnPage) {
+						resolveTurnPage();
+						resolveTurnPage = null;
+						isTurningPagePromise = null;
+					}
 
 					if (epubInstance?.locations) {
 						// Forzamos el tipo a 'any' para acceder a 'start.cfi' y confiamos en las verificaciones de nulidad.
