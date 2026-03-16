@@ -10,18 +10,20 @@ export default defineConfig({
 		SvelteKitPWA({
 			srcDir: 'src',
 			strategies: 'generateSW',
-			registerType: 'autoUpdate'
+			registerType: 'autoUpdate',
+			manifest: false,
+			useCredentials: true
 		  })
 	],
 	server: {
 		host: true,      // equivalente a "0.0.0.0"
 		port: 80,       // cámbialo si ya tienes algo ocupando ese puerto
-		allowedHosts: ['leeme.mooo.com', 'frontend-1061461444755.us-central1.run.app']
+		allowedHosts: ['leeme.mooo.com', 'frontend-1061461444755.us-central1.run.app', 'voxenfy.com']
 	},
 	preview: {
 		host: true,
 		port: 80,
-		allowedHosts: ['leeme.mooo.com', 'frontend-1061461444755.us-central1.run.app']
+		allowedHosts: ['leeme.mooo.com', 'frontend-1061461444755.us-central1.run.app', 'voxenfy.com']
   	},
 	build: {
 		outDir: 'build'
