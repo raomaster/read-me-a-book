@@ -2,7 +2,7 @@
 export default {
   pageTitle: "Mi Biblioteca",
   metaDescription: "Tu librería personal de EPUBs.",
-  importButton: "Importar",
+  importButton: "Importar .epub",
   openOptionsMenu: "Abrir menú de opciones",
   noBooksYet: "Aún no hay libros",
   importFirstBook: "Importa tu primer EPUB para comenzar.",

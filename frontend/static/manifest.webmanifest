@@ -1,8 +1,8 @@
 {
-	"name": "Leeme",
-	"short_name": "Leeme",
-	"description": "An EPUB reader application.",
-	"start_url": "/",
+	"name": "Voxenfy",
+	"short_name": "Voxenfy",
+	"description": "Tu lector de libros con voz",
+	"start_url": "/?v=2",
 	"display": "standalone",
 	"background_color": "#f3f4f6",
 	"theme_color": "#4f46e5",
