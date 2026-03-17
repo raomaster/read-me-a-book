@@ -68,6 +68,37 @@
 	let currentReadingElements: HTMLElement[] = []; // todos los elementos resaltados actualmente
 	let currentReadingElement: HTMLElement | null = null; // legacy var to satisfy old refs
 
+	// ---------- Keep-awake: audio silencioso en loop (iOS PWA no respeta Wake Lock API) ----------
+	let keepAwakeAudio: HTMLAudioElement | null = null;
+
+	// Audio WAV silencioso de ~1 segundo codificado en base64
+	const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+
+	function startKeepAwake() {
+		if (keepAwakeAudio) return; // ya activo
+		keepAwakeAudio = new Audio(SILENT_WAV);
+		keepAwakeAudio.loop = true;
+		keepAwakeAudio.volume = 0.001; // prácticamente inaudible
+		keepAwakeAudio.play().catch(() => {});
+	}
+
+	function stopKeepAwake() {
+		if (!keepAwakeAudio) return;
+		keepAwakeAudio.pause();
+		keepAwakeAudio.src = '';
+		keepAwakeAudio = null;
+	}
+
+	// ---------- Audio persistente (reusar un solo elemento para mantener sesión iOS) ----------
+	let persistentAudio: HTMLAudioElement | null = null;
+
+	function getOrCreateAudio(): HTMLAudioElement {
+		if (!persistentAudio) {
+			persistentAudio = new Audio();
+		}
+		return persistentAudio;
+	}
+
 	// ---------- Helpers de cola y navegación ----------
 	const MAX_CHUNK = 800;
 	function splitIntoChunks(txt: string): string[] {
@@ -178,6 +209,7 @@
 	async function continueToNextPage() {
 		if (!rendition) {
 			isAudioPlaying = false;
+			stopKeepAwake();
 			return;
 		}
 
@@ -203,6 +235,7 @@
 				isTurningPagePromise = null;
 			}
 			isAudioPlaying = false;
+			stopKeepAwake();
 			return;
 		}
 
@@ -224,6 +257,7 @@
 			playItem(0);
 		} else {
 			isAudioPlaying = false;
+			stopKeepAwake();
 		}
 	}
 
@@ -295,6 +329,7 @@
 	async function playItem(index: number) {
 		if (index >= readingQueue.length) {
 			isAudioPlaying = false;
+			stopKeepAwake();
 			return;
 		}
 		const item = readingQueue[index];
@@ -328,9 +363,7 @@
 		// Stop any current audio before starting new one
 		if (currentAudio) {
 			currentAudio.pause();
-			currentAudio.src = '';
-			currentAudio = null;
-			isAudioPlaying = false;
+			// No destruir el elemento — lo reusamos para mantener la sesión iOS
 		}
 
 		// ensure audio fetched
@@ -372,15 +405,33 @@
 			}, 50); // 10 ms tick → 40–50 ms total
 		};
 
-		// play
-		currentAudio = new Audio(audioUrl);
+		// play — reusar el mismo HTMLAudioElement para mantener la sesión de audio en iOS
+		currentAudio = getOrCreateAudio();
 		audioEl = currentAudio;
-		audioEl = currentAudio;
-		audioEl = currentAudio;
+		currentAudio.src = audioUrl;
 		currentAudio.volume = 0; // start muted to prevent click
-		currentAudio.play();
+		currentAudio.load(); // forzar carga del nuevo src
+
+		try {
+			await currentAudio.play();
+		} catch (err) {
+			console.warn('[TTS] play() rechazado, reintentando…', err);
+			await new Promise((r) => setTimeout(r, 150));
+			try {
+				await currentAudio.play();
+			} catch (err2) {
+				console.error('[TTS] play() falló definitivamente:', err2);
+				isAudioPlaying = false;
+				stopKeepAwake();
+				if (browser && 'mediaSession' in navigator)
+					navigator.mediaSession.playbackState = 'paused';
+				return;
+			}
+		}
+
 		fadeIn(currentAudio);
 		isAudioPlaying = true;
+		startKeepAwake();
 		setupMediaSession();
 		if (browser && 'mediaSession' in navigator)
 			navigator.mediaSession.playbackState = 'playing';
@@ -429,6 +480,12 @@
 	}
 
 	onDestroy(() => {
+		stopKeepAwake();
+		if (persistentAudio) {
+			persistentAudio.pause();
+			persistentAudio.src = '';
+			persistentAudio = null;
+		}
 		if (browser && 'mediaSession' in navigator) {
 			navigator.mediaSession.playbackState = 'none';
 			navigator.mediaSession.setActionHandler('play', null);
@@ -720,12 +777,16 @@
 
 		initEpubViewer(); // Llamar a la función asíncrona para inicializar el visor.
 
-		// Reanudar audio cuando el usuario vuelve de pantalla bloqueada
-		const handleVisibilityChange = () => {
-			if (!document.hidden && currentAudio && currentAudio.paused && isAudioPlaying) {
-				currentAudio.play().catch(() => {});
-				if ('mediaSession' in navigator)
-					navigator.mediaSession.playbackState = 'playing';
+		// Reanudar audio y wake lock cuando el usuario vuelve de pantalla bloqueada
+		const handleVisibilityChange = async () => {
+			if (!document.hidden && isAudioPlaying) {
+				// Re-adquirir wake lock (iOS lo libera al ir a background)
+				await startKeepAwake();
+				if (currentAudio && currentAudio.paused) {
+					currentAudio.play().catch(() => {});
+					if ('mediaSession' in navigator)
+						navigator.mediaSession.playbackState = 'playing';
+				}
 			}
 		};
 		document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -995,20 +1056,24 @@
 		navigator.mediaSession.setActionHandler('play', () => {
 			currentAudio?.play();
 			isAudioPlaying = true;
+			startKeepAwake();
 			navigator.mediaSession.playbackState = 'playing';
 		});
 		navigator.mediaSession.setActionHandler('pause', () => {
 			currentAudio?.pause();
 			isAudioPlaying = false;
+			stopKeepAwake();
 			navigator.mediaSession.playbackState = 'paused';
 		});
 		navigator.mediaSession.setActionHandler('stop', () => {
 			if (currentAudio) {
 				currentAudio.pause();
 				currentAudio.src = '';
-				currentAudio = null;
 			}
+			currentAudio = null;
+			persistentAudio = null;
 			isAudioPlaying = false;
+			stopKeepAwake();
 			navigator.mediaSession.playbackState = 'none';
 		});
 	}
@@ -1018,11 +1083,13 @@
 		if (currentAudio.paused) {
 			currentAudio.play();
 			isAudioPlaying = true;
+			startKeepAwake();
 			if (browser && 'mediaSession' in navigator)
 				navigator.mediaSession.playbackState = 'playing';
 		} else {
 			currentAudio.pause();
 			isAudioPlaying = false;
+			stopKeepAwake();
 			if (browser && 'mediaSession' in navigator)
 				navigator.mediaSession.playbackState = 'paused';
 		}
